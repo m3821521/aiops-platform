@@ -43,8 +43,16 @@ request.interceptors.response.use(
         window.location.href = '/login'
       } else if (status === 403) {
         message.error('权限不足')
+      } else if (status === 404) {
+        message.error('资源不存在')
+      } else if (status === 409) {
+        message.error('操作冲突，请刷新后重试')
+      } else if (status === 429) {
+        message.error('请求过于频繁，请稍后再试')
       } else if (status >= 500) {
-        message.error('服务器错误')
+        const data = error.response.data as ApiResponse
+        const rid = data?.request_id ? ` (${data.request_id})` : ''
+        message.error(`服务器错误${rid}`)
       } else {
         const data = error.response.data as ApiResponse
         message.error(data?.message || `请求失败 (${status})`)

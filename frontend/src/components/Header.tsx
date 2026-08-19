@@ -15,7 +15,9 @@ import { useAuthStore } from '@/stores/auth'
 import { useEffect, useState } from 'react'
 import { clusterApi } from '@/api/cluster'
 import { alertsApi } from '@/api/alerts'
+import { automationApi } from '@/api/automation'
 import type { Cluster, Alert } from '@/types'
+import type { AutomationAction } from '@/api/automation'
 
 const { Header } = Layout
 
@@ -26,6 +28,7 @@ export default function AppHeader() {
   const { user, logout } = useAuthStore()
   const [clusters, setClusters] = useState<Cluster[]>([])
   const [firingAlerts, setFiringAlerts] = useState<Alert[]>([])
+  const [pendingActions, setPendingActions] = useState<AutomationAction[]>([])
 
   useEffect(() => {
     clusterApi.list().then(setClusters).catch(() => {})
@@ -37,9 +40,16 @@ export default function AppHeader() {
       .catch(() => {})
   }
 
+  const fetchPendingActions = () => {
+    automationApi.pendingApproval({ page: 1, page_size: 5 })
+      .then((res) => setPendingActions(res?.items || []))
+      .catch(() => {})
+  }
+
   useEffect(() => {
     fetchAlerts()
-    const timer = setInterval(fetchAlerts, 30000)
+    fetchPendingActions()
+    const timer = setInterval(() => { fetchAlerts(); fetchPendingActions() }, 30000)
     return () => clearInterval(timer)
   }, [])
 
@@ -91,34 +101,57 @@ export default function AppHeader() {
         <Popover
           content={
             <div style={{ width: 320 }}>
-              <div style={{ fontWeight: 600, marginBottom: 8 }}>活动告警 ({firingAlerts.length})</div>
-              {firingAlerts.length > 0 ? (
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>待审批操作 ({pendingActions.length})</div>
+              {pendingActions.length > 0 ? (
                 <List
                   size="small"
-                  dataSource={firingAlerts}
+                  dataSource={pendingActions}
                   renderItem={(item) => (
                     <List.Item>
                       <Space>
-                        <Tag color={item.severity === 'critical' ? 'error' : item.severity === 'warning' ? 'warning' : 'info'}>
-                          {item.severity}
-                        </Tag>
-                        <span style={{ fontSize: 13 }}>{item.alertname}</span>
+                        <Tag color="orange">{item.risk}</Tag>
+                        <span style={{ fontSize: 13 }}>{item.target_name}</span>
+                        <span style={{ fontSize: 11, color: '#999' }}>{item.action_type}</span>
                       </Space>
                     </List.Item>
                   )}
                 />
               ) : (
-                <div style={{ color: '#999', textAlign: 'center', padding: '16px 0' }}>暂无活动告警</div>
+                <div style={{ color: '#999', textAlign: 'center', padding: '8px 0' }}>暂无待审批操作</div>
               )}
-              <div style={{ textAlign: 'center', marginTop: 8 }}>
-                <Button type="link" size="small" onClick={() => navigate('/alerts/realtime')}>查看全部</Button>
+              <div style={{ textAlign: 'center', marginBottom: 8 }}>
+                <Button type="link" size="small" onClick={() => navigate('/automation/actions')}>查看全部</Button>
+              </div>
+              <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: 8 }}>
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>活动告警 ({firingAlerts.length})</div>
+                {firingAlerts.length > 0 ? (
+                  <List
+                    size="small"
+                    dataSource={firingAlerts}
+                    renderItem={(item) => (
+                      <List.Item>
+                        <Space>
+                          <Tag color={item.severity === 'critical' ? 'error' : item.severity === 'warning' ? 'warning' : 'info'}>
+                            {item.severity}
+                          </Tag>
+                          <span style={{ fontSize: 13 }}>{item.alertname}</span>
+                        </Space>
+                      </List.Item>
+                    )}
+                  />
+                ) : (
+                  <div style={{ color: '#999', textAlign: 'center', padding: '8px 0' }}>暂无活动告警</div>
+                )}
+                <div style={{ textAlign: 'center', marginTop: 8 }}>
+                  <Button type="link" size="small" onClick={() => navigate('/alerts/realtime')}>查看全部</Button>
+                </div>
               </div>
             </div>
           }
           title={null}
           trigger="click"
         >
-          <Badge count={firingAlerts.length} size="small">
+          <Badge count={firingAlerts.length + pendingActions.length} size="small">
             <Button type="text" icon={<BellOutlined />} />
           </Badge>
         </Popover>

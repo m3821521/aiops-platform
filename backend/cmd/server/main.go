@@ -29,6 +29,7 @@ import (
 	"github.com/aiops/aiops-platform/internal/rca"
 	"github.com/aiops/aiops-platform/internal/redisutil"
 	"github.com/aiops/aiops-platform/internal/topology"
+	"github.com/aiops/aiops-platform/internal/workflow"
 	"github.com/aiops/aiops-platform/pkg/logger"
 	"github.com/prometheus/common/model"
 	corev1 "k8s.io/api/core/v1"
@@ -91,7 +92,7 @@ func main() {
 
 	// 数据库迁移（开发环境使用 AutoMigrate，未来替换为 versioned migration）。
 	migrator := migration.NewGormMigrator(db)
-	if err := migrator.Migrate(&incident.Incident{}, &incident.IncidentSignal{}, &anomaly.AnomalyRecord{}, &rca.IncidentAnalysis{}, &ai.AIAnalysisRecord{}, &tools.ToolAuditRecord{}); err != nil {
+	if err := migrator.Migrate(&incident.Incident{}, &incident.IncidentSignal{}, &anomaly.AnomalyRecord{}, &rca.IncidentAnalysis{}, &ai.AIAnalysisRecord{}, &tools.ToolAuditRecord{}, &automation.Action{}, &automation.ActionExecution{}, &automation.AutomationAudit{}, &workflow.Workflow{}, &workflow.WorkflowStep{}); err != nil {
 		slog.Warn("migration failed", "err", err)
 	}
 
@@ -136,6 +137,52 @@ func main() {
 	automationEngine := automation.NewEngine(clusterSvc)
 	jenkinsClient := automation.NewJenkinsClient(cfg.Jenkins.URL, cfg.Jenkins.Username, cfg.Jenkins.Token, cfg.Jenkins.Timeout)
 	argocdClient := automation.NewArgoCDClient(cfg.ArgoCD.URL, cfg.ArgoCD.Token, cfg.ArgoCD.Timeout)
+
+	// Automation Action Framework（审批+执行+审计）。
+	actionRepo := automation.NewActionRepository(db)
+	executionRepo := automation.NewExecutionRepository(db)
+	automationAuditRepo := automation.NewAuditRepository(db)
+	automationPolicy := automation.NewPolicyEngine(cfg.Server.Mode)
+	k8sExecutor := automation.NewKubernetesExecutor(clusterSvc)
+	jenkinsExecutor := automation.NewJenkinsExecutor(jenkinsClient)
+	argocdExecutor := automation.NewArgoCDExecutor(argocdClient)
+	automationService := automation.NewService(actionRepo, executionRepo, automationAuditRepo, automationPolicy, k8sExecutor, jenkinsExecutor, argocdExecutor)
+	// Incident Timeline 集成：Action 执行完成后写入 Incident 信号。
+	automationService.OnExecutionComplete = func(ctx context.Context, incidentID int64, act *automation.Action, result *automation.ExecutionResult) {
+		signal := &incident.IncidentSignal{
+			IncidentID:   incidentID,
+			SignalType:   "automation",
+			SignalID:     fmt.Sprintf("action-%d", act.ID),
+			Title:        fmt.Sprintf("%s %s", act.ActionType, act.TargetName),
+			Severity:     "info",
+			Cluster:      act.Cluster,
+			Namespace:    act.Namespace,
+			ResourceType: act.TargetType,
+			ResourceName: act.TargetName,
+			Timestamp:    time.Now(),
+			Resolved:     result.Success,
+			Metadata: incident.JSONMap{
+				"action_id": act.ID,
+				"action_type": act.ActionType,
+				"success": result.Success,
+				"message": result.Message,
+				"error": result.Error,
+			},
+		}
+		if result.Success {
+			now := time.Now()
+			signal.ResolvedAt = &now
+		}
+		_, _ = incidentRepo.UpsertSignal(ctx, signal)
+	}
+	automationActionHandler := &automation.Handler{Service: automationService}
+	slog.Info("automation action framework initialized")
+
+	// Workflow 编排引擎。
+	workflowRepo := workflow.NewRepository(db)
+	workflowService := workflow.NewService(workflowRepo, &workflowActionAdapter{automationSvc: automationService})
+	workflowHandler := &workflow.Handler{Service: workflowService}
+	slog.Info("workflow engine initialized")
 
 	// RCA V2 Pipeline（基于 Incident 的完整根因分析）。
 	rcaAnalysisRepo := rca.NewAnalysisRepository(db)
@@ -213,9 +260,12 @@ func main() {
 		Logs:       &handler.LogsHandler{ES: esClient, Analyzer: logAnalyzer},
 		AI: &handler.AIHandler{Assistant: aiAssistant, Engine: toolEngine, AuditRepo: toolAuditRepo, Enabled: cfg.AI.Enabled},
 		Automation: &handler.AutomationHandler{Engine: automationEngine},
+		AutomationAction: automationActionHandler,
+		Workflow:        workflowHandler,
 		Jenkins:    &handler.JenkinsHandler{Jenkins: jenkinsClient},
 		ArgoCD:     &handler.ArgoCDHandler{ArgoCD: argocdClient},
 		Auth:       &handler.AuthHandler{AuthService: authService, UserRepo: userRepo},
+		AuthService: authService,
 		Audit:      &handler.AuditHandler{Repo: auditRepo},
 		Incident:   incidentHandler,
 		IncidentRCA: incidentRCAHandler,
@@ -305,6 +355,31 @@ func (a *anomalyIncidentAdapter) IngestAnomalySignal(ctx context.Context, sig an
 		return inc.ID, nil
 	}
 	return 0, nil
+}
+
+// workflowActionAdapter 让 automation.Service 实现 workflow.ActionExecutor 接口。
+type workflowActionAdapter struct {
+	automationSvc *automation.Service
+}
+
+func (a *workflowActionAdapter) ExecuteAction(ctx context.Context, actionType, cluster, namespace, targetName string, params map[string]interface{}) (bool, string, error) {
+	if a.automationSvc == nil {
+		return false, "automation service unavailable", nil
+	}
+	// 创建临时 Action 并执行（不经过审批，因为 Workflow 已经审批）
+	act := &automation.Action{
+		ActionType: actionType,
+		Cluster:    cluster,
+		Namespace:  namespace,
+		TargetName: targetName,
+		Status:     automation.StatusApproved,
+	}
+	act.SetParameters(params)
+	result, err := a.automationSvc.ExecuteWorkflowStep(ctx, act)
+	if err != nil {
+		return false, err.Error(), nil
+	}
+	return result.Success, result.Message, nil
 }
 
 // rcaContextCollector 是 rca.ContextCollector 接口的适配器，

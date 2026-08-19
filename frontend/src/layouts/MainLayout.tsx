@@ -90,24 +90,31 @@ export default function MainLayout() {
       theme={{
         algorithm: themeMode === 'dark' ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
         token: {
-          colorPrimary: '#1677ff',
+          colorPrimary: '#2563eb',
+          colorInfo: '#2563eb',
+          colorSuccess: '#16a34a',
+          colorWarning: '#d97706',
+          colorError: '#dc2626',
           borderRadius: 6,
+          fontSize: 13,
+          controlHeight: 32,
         },
       }}
     >
-      <Layout style={{ minHeight: '100vh' }}>
+      <Layout style={{ minHeight: '100vh', background: 'var(--bg-app)' }}>
         <Sidebar />
-        <Layout>
+        <Layout style={{ background: 'var(--bg-app)' }}>
           <AppHeader />
-          <div style={{ padding: '8px 24px 0' }}>
+          <div style={{ padding: '4px 24px 0', background: 'var(--bg-app)' }}>
             <Breadcrumb items={breadcrumbItems.map((item) => ({ title: item }))} />
           </div>
           <Content
             style={{
-              margin: 16,
-              padding: 16,
+              margin: '8px 16px 16px',
+              padding: 0,
               minHeight: 280,
               overflow: 'auto',
+              background: 'transparent',
             }}
           >
             <Outlet />

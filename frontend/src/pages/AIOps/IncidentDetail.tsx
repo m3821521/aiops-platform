@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Drawer, Tabs, Descriptions, Tag, Spin, Timeline, Empty, Button, Space,
-  Modal, message, Badge, Card,
+  Modal, message, Badge, Card, Alert,
 } from 'antd'
 import {
   CheckCircleOutlined, StopOutlined, CloseCircleOutlined,
@@ -12,6 +12,7 @@ import { incidentApi } from '@/api/incident'
 import { topologyApi } from '@/api/topology'
 import { rcaApi } from '@/api/rca'
 import { aiAnalysisApi } from '@/api/aiAnalysis'
+import { automationApi } from '@/api/automation'
 import type { Incident, IncidentSignal, TopologyNode, RCAResult, AIAnalysisResult } from '@/types'
 import dayjs from 'dayjs'
 
@@ -511,6 +512,72 @@ export default function IncidentDetail({ id, open, onClose, onChanged }: Props) 
     )
   }
 
+  const renderRecommendedActions = () => {
+    const priorityColor: Record<string, string> = { P1: 'red', P2: 'orange', P3: 'blue', P4: 'default' }
+    const riskColor: Record<string, string> = { low: 'green', medium: 'orange', high: 'red', critical: 'volcano' }
+    const recs: any[] = []
+    if (aiResult?.recommendations) {
+      aiResult.recommendations.forEach((r: any, i: number) => {
+        if (r.action_type) {
+          recs.push({ ...r, source: 'AI', key: `ai-${i}` })
+        }
+      })
+    }
+
+    if (recs.length === 0) {
+      return <Empty description="暂无推荐操作" />
+    }
+
+    const handleCreateAction = async (rec: any) => {
+      try {
+        const target = rec.target || rec.resource_name || incident?.resource_name || ''
+        const action = await automationApi.createFromIncident(Number(id), {
+          action_type: rec.action_type,
+          target_type: rec.target_type || rec.resource_type || 'pod',
+          target_name: target,
+          cluster: incident?.cluster || 'local',
+          namespace: incident?.namespace,
+          reason: rec.reason || rec.title || rec.description,
+          risk: rec.risk,
+        })
+        message.success(`操作 #${action.id} 已创建，等待审批`)
+      } catch (e: any) {
+        message.error('创建操作失败: ' + (e?.message || ''))
+      }
+    }
+
+    return (
+      <Space direction="vertical" style={{ width: '100%' }} size="small">
+        {recs.map((rec) => (
+          <Card key={rec.key} size="small" title={
+            <Space>
+              <Tag color={priorityColor[rec.priority] || 'default'}>{rec.priority}</Tag>
+              <span>{rec.title}</span>
+              <Tag>来源: {rec.source}</Tag>
+              <Tag color={riskColor[rec.risk]}>风险: {rec.risk}</Tag>
+            </Space>
+          } extra={
+            <Button type="primary" size="small" onClick={() => handleCreateAction(rec)}>
+              创建操作
+            </Button>
+          }>
+            <div style={{ fontSize: 12, color: '#666' }}>{rec.description}</div>
+            {rec.reason && <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>原因: {rec.reason}</div>}
+            <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>
+              目标: {rec.target || rec.resource_name || '-'} | 类型: {rec.action_type}
+            </div>
+          </Card>
+        ))}
+        <Alert
+          type="info"
+          showIcon
+          message="安全说明"
+          description="所有操作必须经过人工审批后才能执行。AI/RCA 仅提供建议，不会自动执行。"
+        />
+      </Space>
+    )
+  }
+
   const renderAI = () => {
     if (aiLoading) return <Spin />
     if (!aiResult) {
@@ -686,6 +753,7 @@ export default function IncidentDetail({ id, open, onClose, onChanged }: Props) 
             { key: 'topology', label: '拓扑影响', children: renderTopology() },
             { key: 'rca', label: '根因分析', children: renderRCA() },
             { key: 'ai', label: 'AI 分析', children: renderAI() },
+            { key: 'actions', label: '推荐操作', children: renderRecommendedActions() },
           ]}
         />
       </Spin>

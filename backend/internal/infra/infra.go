@@ -31,6 +31,10 @@ func NewMySQL(cfg config.Mysql) (*gorm.DB, error) {
 	if cfg.MaxOpen > 0 {
 		sqlDB.SetMaxOpenConns(cfg.MaxOpen)
 	}
+	// ConnMaxLifetime 防止使用 MySQL 服务端已关闭的连接（wait_timeout 默认 8h）。
+	// 设为 1 小时，比 MySQL 默认 wait_timeout 短，安全。
+	sqlDB.SetConnMaxLifetime(time.Hour)
+	sqlDB.SetConnMaxIdleTime(30 * time.Minute)
 	if err := sqlDB.Ping(); err != nil {
 		return nil, fmt.Errorf("MySQL Ping 失败: %w", err)
 	}
@@ -40,9 +44,15 @@ func NewMySQL(cfg config.Mysql) (*gorm.DB, error) {
 
 func NewRedis(cfg config.Redis) (*redis.Client, error) {
 	client := redis.NewClient(&redis.Options{
-		Addr:     cfg.Address,
-		Password: cfg.Password,
-		DB:       cfg.DB,
+		Addr:         cfg.Address,
+		Password:     cfg.Password,
+		DB:           cfg.DB,
+		PoolSize:     20,               // 连接池大小，默认 10，生产环境建议 20-50
+		MinIdleConns: 5,                // 最小空闲连接，避免冷启动延迟
+		DialTimeout:  5 * time.Second,  // 连接超时
+		ReadTimeout:  3 * time.Second,  // 读超时
+		WriteTimeout: 3 * time.Second,  // 写超时
+		PoolTimeout:  4 * time.Second,  // 从连接池获取连接的等待超时
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

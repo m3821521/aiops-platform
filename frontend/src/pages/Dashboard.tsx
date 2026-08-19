@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Row, Col, Card, Statistic, Typography, Space, Tag, Spin, Alert, Table, Badge, Button, Select } from 'antd'
+import { Row, Col, Typography, Space, Tag, Spin, Table, Button, Select, Progress, Empty } from 'antd'
 import {
   CloudOutlined,
   NodeIndexOutlined,
@@ -10,7 +10,11 @@ import {
   FireOutlined,
   CheckCircleOutlined,
   ReloadOutlined,
-  ExclamationCircleOutlined,
+  ClockCircleOutlined,
+  RocketOutlined,
+  HeartOutlined,
+  ArrowUpOutlined,
+  ArrowDownOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import ReactECharts from 'echarts-for-react'
@@ -78,310 +82,272 @@ export default function Dashboard() {
     if (clusters.length === 0) return
     setMetricsError('')
     const seconds = timeRange === '1h' ? 3600 : timeRange === '6h' ? 21600 : 86400
-    const end = dayjs()
-    const start = end.subtract(seconds, 'second')
-    const step = Math.max(30, Math.floor(seconds / 120))
+    const end = Math.floor(Date.now() / 1000)
+    const start = end - seconds
     try {
-      const [cpuRes, memRes] = await Promise.all([
-        metricsApi.range({
-          query: '100 - (avg by(instance)(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)',
-          start: start.toISOString(),
-          end: end.toISOString(),
-          step: `${step}s`,
-        }).catch(() => ({ result: [] })),
-        metricsApi.range({
-          query: '100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))',
-          start: start.toISOString(),
-          end: end.toISOString(),
-          step: `${step}s`,
-        }).catch(() => ({ result: [] })),
+      const [cpuData, memData] = await Promise.all([
+        metricsApi.range({ query: '100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)', start: String(start), end: String(end), step: '60' }).catch(() => null),
+        metricsApi.range({ query: '(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100', start: String(start), end: String(end), step: '60' }).catch(() => null),
       ])
-      setCpuSeries((cpuRes as any)?.result?.[0]?.values || [])
-      setMemSeries((memRes as any)?.result?.[0]?.values || [])
+      if (cpuData?.data?.result?.[0]?.values) setCpuSeries(cpuData.data.result[0].values)
+      if (memData?.data?.result?.[0]?.values) setMemSeries(memData.data.result[0].values)
     } catch {
-      setMetricsError('Prometheus 监控数据源不可用')
+      setMetricsError('监控数据不可用')
     }
-  }, [clusters.length, timeRange])
+  }, [clusters, timeRange])
 
   useEffect(() => {
-    if (clusters.length > 0) fetchMetrics()
-  }, [clusters.length, timeRange, fetchMetrics])
+    fetchMetrics()
+  }, [fetchMetrics])
 
+  // 计算派生指标
   const runningPods = pods.filter((p) => p.status === 'Running').length
-  const abnormalPods = pods.filter((p) => p.status !== 'Running' && p.status !== 'Succeeded')
+  const failedPods = pods.filter((p) => p.status === 'Failed' || p.status === 'CrashLoopBackOff' || p.status === 'Error').length
+  const firingCount = alerts?.total || 0
   const criticalAlerts = alerts?.items?.filter((a) => a.severity === 'critical') || []
   const warningAlerts = alerts?.items?.filter((a) => a.severity === 'warning') || []
-  const firingCount = alerts?.total || 0
+  const abnormalPods = pods.filter((p) => p.status !== 'Running' && p.status !== 'Succeeded' && p.status !== 'Completed')
 
-  // 系统健康状态判定
-  const healthStatus = criticalAlerts.length > 0
-    ? { label: '异常', color: 'error', icon: <ExclamationCircleOutlined /> }
-    : abnormalPods.length > 0
-    ? { label: '警告', color: 'warning', icon: <WarningOutlined /> }
-    : { label: '正常', color: 'success', icon: <CheckCircleOutlined /> }
+  // System Health: 基于 Pod running 比例 + 无 critical alert
+  const totalPods = pods.length || 1
+  const podHealthRatio = (runningPods / totalPods) * 100
+  const alertPenalty = criticalAlerts.length > 0 ? 10 : warningAlerts.length > 0 ? 5 : 0
+  const systemHealth = Math.max(0, Math.min(100, podHealthRatio - alertPenalty))
+  const healthStatus = systemHealth >= 95 ? 'healthy' : systemHealth >= 80 ? 'warning' : 'critical'
+  const healthColor = healthStatus === 'healthy' ? '#16a34a' : healthStatus === 'warning' ? '#d97706' : '#dc2626'
 
   const podColumns = [
-    { title: 'Pod', dataIndex: 'name', key: 'name', render: (t: string) => <Text strong>{t}</Text> },
-    { title: 'Namespace', dataIndex: 'namespace', key: 'namespace', render: (t: string) => <Tag>{t}</Tag> },
-    { title: '状态', dataIndex: 'status', key: 'status', render: (s: string) => <Tag color="error">{s}</Tag> },
-    { title: 'Node', dataIndex: 'node', key: 'node', render: (v: string) => v || '-' },
-    {
-      title: '操作',
-      key: 'action',
-      render: (_: any, record: Pod) => (
-        <Button type="link" size="small" onClick={() => navigate(`/kubernetes/pods?name=${record.name}`)}>
-          查看
-        </Button>
-      ),
-    },
+    { title: 'Pod', dataIndex: 'name', key: 'name', render: (t: string) => <Text strong style={{ fontSize: 13 }}>{t}</Text> },
+    { title: 'Namespace', dataIndex: 'namespace', key: 'namespace', render: (v: string) => v || '-' },
+    { title: 'Status', dataIndex: 'status', key: 'status', render: (s: string) => (
+      <span className={`status-badge ${s === 'Running' ? 'success' : s === 'Failed' ? 'danger' : 'warning'}`}>{s || 'Unknown'}</span>
+    )},
+    { title: 'Restarts', dataIndex: 'restartCount', key: 'restartCount', render: (v: number) => v || 0 },
   ]
 
+  const alertColumns = [
+    { title: 'Alert', dataIndex: 'alertname', key: 'alertname', render: (t: string) => <Text strong style={{ fontSize: 13 }}>{t}</Text> },
+    { title: 'Severity', dataIndex: 'severity', key: 'severity', render: (s: string) => (
+      <span className={`status-badge ${s === 'critical' ? 'critical' : s === 'warning' ? 'warning' : 'info'}`}>{s}</span>
+    )},
+    { title: 'Service', dataIndex: 'service', key: 'service', render: (v: string) => v || '-' },
+  ]
+
+  const chartOption = {
+    tooltip: { trigger: 'axis', backgroundColor: '#fff', borderColor: '#e5e7eb', textStyle: { color: '#111827', fontSize: 12 } },
+    legend: { data: ['CPU', 'Memory'], bottom: 0, textStyle: { fontSize: 12, color: '#6b7280' }, itemWidth: 12, itemHeight: 8 },
+    grid: { left: 45, right: 16, top: 16, bottom: 36 },
+    xAxis: { type: 'time', axisLabel: { fontSize: 11, color: '#9ca3af' }, axisLine: { lineStyle: { color: '#e5e7eb' } } },
+    yAxis: { type: 'value', axisLabel: { formatter: '{value}%', fontSize: 11, color: '#9ca3af' }, max: 100, splitLine: { lineStyle: { color: '#f3f4f6' } } },
+    series: [
+      {
+        name: 'CPU',
+        type: 'line',
+        smooth: true,
+        showSymbol: false,
+        data: cpuSeries.map((v: any) => [v[0] * 1000, parseFloat(v[1]).toFixed(1)]),
+        lineStyle: { color: '#2563eb', width: 2 },
+        areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(37,99,235,0.15)' }, { offset: 1, color: 'rgba(37,99,235,0.01)' }] } },
+      },
+      {
+        name: 'Memory',
+        type: 'line',
+        smooth: true,
+        showSymbol: false,
+        data: memSeries.map((v: any) => [v[0] * 1000, parseFloat(v[1]).toFixed(1)]),
+        lineStyle: { color: '#7c3aed', width: 2 },
+        areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(124,58,237,0.12)' }, { offset: 1, color: 'rgba(124,58,237,0.01)' }] } },
+      },
+    ],
+  }
+
   return (
-    <div>
-      <Space style={{ marginBottom: 24 }} align="center">
-        <Title level={4} style={{ margin: 0 }}>运维总览</Title>
-        <Badge status={healthStatus.color as any} text={<Tag color={healthStatus.color} icon={healthStatus.icon}>{healthStatus.label}</Tag>} />
-        <Button icon={<ReloadOutlined />} size="small" onClick={fetchData} loading={loading}>刷新</Button>
-      </Space>
+    <div className="aiops-page">
+      {/* Page Header */}
+      <div className="aiops-page-header">
+        <div>
+          <div className="aiops-page-title">Operations Overview</div>
+          <div className="aiops-page-subtitle">
+            {dayjs().format('YYYY-MM-DD HH:mm')} · {clusters.length} cluster{clusters.length !== 1 ? 's' : ''} · {nodes.length} node{nodes.length !== 1 ? 's' : ''}
+          </div>
+        </div>
+        <Space>
+          <Select
+            value={timeRange}
+            onChange={setTimeRange}
+            size="middle"
+            style={{ width: 110 }}
+            options={[
+              { label: 'Last 1h', value: '1h' },
+              { label: 'Last 6h', value: '6h' },
+              { label: 'Last 24h', value: '24h' },
+            ]}
+          />
+          <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>Refresh</Button>
+        </Space>
+      </div>
 
-      {error && (
-        <Alert message="数据加载失败" description={error} type="error" showIcon style={{ marginBottom: 16 }} />
-      )}
-
-      {/* 资源统计 */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={12} sm={8} md={6} lg={4}>
-          <Card className="stat-card">
-            <Spin spinning={loading}>
-              <Statistic title="集群" value={clusters.length} prefix={<CloudOutlined style={{ color: '#1677ff' }} />} />
-            </Spin>
-          </Card>
+      {/* KPI Row — Compact */}
+      <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+        <Col xs={12} sm={12} md={6}>
+          <div className={`kpi-card accent-${healthStatus}`} onClick={() => navigate('/kubernetes/nodes')} style={{ cursor: 'pointer' }}>
+            <HeartOutlined className="kpi-icon" style={{ color: healthColor }} />
+            <div className="kpi-label"><HeartOutlined style={{ fontSize: 11 }} /> System Health</div>
+            <div>
+              <div className="kpi-value" style={{ color: healthColor, fontSize: 28 }}>{systemHealth.toFixed(1)}%</div>
+              <div className="kpi-sub" style={{ color: healthColor }}>
+                {healthStatus === 'healthy' ? 'All systems operational' : healthStatus === 'warning' ? 'Minor issues detected' : 'Critical issues require attention'}
+              </div>
+            </div>
+          </div>
         </Col>
-        <Col xs={12} sm={8} md={6} lg={4}>
-          <Card className="stat-card">
-            <Spin spinning={loading}>
-              <Statistic title="Node" value={nodes.length} prefix={<NodeIndexOutlined style={{ color: '#52c41a' }} />} />
-            </Spin>
-          </Card>
+        <Col xs={12} sm={12} md={6}>
+          <div className={`kpi-card ${firingCount > 0 ? 'accent-warning' : ''}`} onClick={() => navigate('/aiops/incidents')} style={{ cursor: 'pointer' }}>
+            <AlertOutlined className="kpi-icon" style={{ color: '#d97706' }} />
+            <div className="kpi-label"><AlertOutlined style={{ fontSize: 11 }} /> Active Alerts</div>
+            <div>
+              <div className="kpi-value" style={{ fontSize: 28 }}>{firingCount}</div>
+              <div className="kpi-sub">
+                {criticalAlerts.length > 0 && <span style={{ color: '#dc2626', fontWeight: 600 }}>{criticalAlerts.length} Critical</span>}
+                {criticalAlerts.length > 0 && warningAlerts.length > 0 && ' · '}
+                {warningAlerts.length > 0 && <span style={{ color: '#d97706' }}>{warningAlerts.length} Warning</span>}
+                {firingCount === 0 && <span style={{ color: '#16a34a' }}>No active alerts</span>}
+              </div>
+            </div>
+          </div>
         </Col>
-        <Col xs={12} sm={8} md={6} lg={4}>
-          <Card className="stat-card">
-            <Spin spinning={loading}>
-              <Statistic
-                title="Pod"
-                value={pods.length}
-                prefix={<AppstoreOutlined style={{ color: '#722ed1' }} />}
-                suffix={pods.length > 0 ? <span style={{ fontSize: 14, color: '#999' }}>({runningPods} Running)</span> : null}
-              />
-            </Spin>
-          </Card>
+        <Col xs={12} sm={12} md={6}>
+          <div className="kpi-card" onClick={() => navigate('/kubernetes/pods')} style={{ cursor: 'pointer' }}>
+            <AppstoreOutlined className="kpi-icon" style={{ color: '#7c3aed' }} />
+            <div className="kpi-label"><AppstoreOutlined style={{ fontSize: 11 }} /> Infrastructure</div>
+            <div>
+              <div className="kpi-value" style={{ fontSize: 28 }}>{pods.length} <span style={{ fontSize: 16, color: '#9ca3af', fontWeight: 400 }}>Pods</span></div>
+              <div className="kpi-sub">
+                <span style={{ color: '#16a34a' }}>{runningPods} Running</span>
+                {failedPods > 0 && <span style={{ color: '#dc2626' }}> · {failedPods} Failed</span>}
+                {abnormalPods.length > 0 && <span style={{ color: '#d97706' }}> · {abnormalPods.length} Abnormal</span>}
+              </div>
+            </div>
+          </div>
         </Col>
-        <Col xs={12} sm={8} md={6} lg={4}>
-          <Card className="stat-card">
-            <Spin spinning={loading}>
-              <Statistic
-                title="活动告警"
-                value={firingCount}
-                prefix={<AlertOutlined style={{ color: '#faad14' }} />}
-                valueStyle={{ color: firingCount > 0 ? '#faad14' : undefined }}
-              />
-            </Spin>
-          </Card>
-        </Col>
-        <Col xs={12} sm={8} md={6} lg={4}>
-          <Card className="stat-card">
-            <Spin spinning={loading}>
-              <Statistic
-                title="严重告警"
-                value={criticalAlerts.length}
-                prefix={<WarningOutlined style={{ color: '#ff4d4f' }} />}
-                valueStyle={{ color: criticalAlerts.length > 0 ? '#ff4d4f' : undefined }}
-              />
-            </Spin>
-          </Card>
-        </Col>
-        <Col xs={12} sm={8} md={6} lg={4}>
-          <Card className="stat-card">
-            <Spin spinning={loading}>
-              <Statistic
-                title="异常 Pod"
-                value={abnormalPods.length}
-                prefix={<ThunderboltOutlined style={{ color: '#eb2f96' }} />}
-                valueStyle={{ color: abnormalPods.length > 0 ? '#eb2f96' : undefined }}
-              />
-            </Spin>
-          </Card>
-        </Col>
-        <Col xs={12} sm={8} md={6} lg={4}>
-          <Card className="stat-card" onClick={() => navigate('/aiops/anomaly')} style={{ cursor: 'pointer' }}>
-            <Spin spinning={loading}>
-              <Statistic
-                title="活跃异常"
-                value={activeAnomalyCount}
-                prefix={<FireOutlined style={{ color: '#fa541c' }} />}
-                valueStyle={{ color: activeAnomalyCount > 0 ? '#fa541c' : undefined }}
-              />
-            </Spin>
-          </Card>
+        <Col xs={12} sm={12} md={6}>
+          <div className="kpi-card" onClick={() => navigate('/aiops/anomaly')} style={{ cursor: 'pointer' }}>
+            <FireOutlined className="kpi-icon" style={{ color: '#ea580c' }} />
+            <div className="kpi-label"><FireOutlined style={{ fontSize: 11 }} /> Anomalies</div>
+            <div>
+              <div className="kpi-value" style={{ fontSize: 28, color: activeAnomalyCount > 0 ? '#ea580c' : undefined }}>{activeAnomalyCount}</div>
+              <div className="kpi-sub">{activeAnomalyCount > 0 ? 'Active anomalies detected' : 'No anomalies detected'}</div>
+            </div>
+          </div>
         </Col>
       </Row>
 
-      {/* 集群状态 */}
-      {clusters.length > 0 && (
-        <Card title="集群状态" style={{ marginBottom: 24 }} size="small">
-          <Row gutter={[16, 16]}>
-            {clusters.map((c) => (
-              <Col xs={24} sm={12} md={8} key={c.name}>
-                <Card size="small" type="inner">
-                  <Space direction="vertical" style={{ width: '100%' }}>
-                    <Space>
-                      <CloudOutlined style={{ color: '#1677ff' }} />
-                      <Text strong>{c.name}</Text>
-                      <Tag color={c.enabled ? 'success' : 'default'}>{c.enabled ? '已启用' : '已禁用'}</Tag>
-                    </Space>
-                    <Text type="secondary" style={{ fontSize: 13 }}>{c.description || '-'}</Text>
-                    <div style={{ fontSize: 12, color: '#999' }}>
-                      认证: {c.auth_type} | Nodes: {nodes.length} | Pods: {pods.length} | 告警: {firingCount}
-                    </div>
-                  </Space>
-                </Card>
-              </Col>
-            ))}
-          </Row>
-        </Card>
-      )}
-
-      {/* 异常 Pod 列表 */}
-      <Row gutter={[16, 16]}>
-        <Col xs={24} lg={14}>
-          <Card
-            title={<Space><ThunderboltOutlined style={{ color: '#eb2f96' }} />异常 Pod</Space>}
-            size="small"
-            extra={<Button type="link" size="small" onClick={() => navigate('/kubernetes/pods')}>查看全部</Button>}
-          >
-            <Spin spinning={loading}>
-              {abnormalPods.length > 0 ? (
-                <Table
-                  columns={podColumns}
-                  dataSource={abnormalPods}
-                  rowKey="name"
-                  pagination={false}
-                  size="small"
-                />
-              ) : (
-                <div style={{ color: '#999', textAlign: 'center', padding: '24px 0' }}>
-                  <CheckCircleOutlined style={{ fontSize: 24, color: '#52c41a', marginBottom: 8 }} />
-                  <div>无异常 Pod</div>
-                </div>
-              )}
-            </Spin>
-          </Card>
-        </Col>
-        <Col xs={24} lg={10}>
-          <Card
-            title={<Space><AlertOutlined style={{ color: '#faad14' }} />活动告警</Space>}
-            size="small"
-            extra={<Button type="link" size="small" onClick={() => navigate('/alerts/realtime')}>查看全部</Button>}
-          >
-            <Spin spinning={loading}>
-              {alerts && alerts.items && alerts.items.length > 0 ? (
-                <Table
-                  columns={[
-                    { title: '告警', dataIndex: 'alertname', key: 'alertname', render: (t: string) => <Text strong>{t}</Text> },
-                    { title: '级别', dataIndex: 'severity', key: 'severity', render: (s: string) => <Tag color={s === 'critical' ? 'error' : s === 'warning' ? 'warning' : 'info'}>{s}</Tag> },
-                    { title: '服务', dataIndex: 'service', key: 'service', render: (v: string) => v || '-' },
-                  ]}
-                  dataSource={alerts.items.slice(0, 5)}
-                  rowKey="id"
-                  pagination={false}
-                  size="small"
-                />
-              ) : (
-                <div style={{ color: '#999', textAlign: 'center', padding: '24px 0' }}>
-                  <CheckCircleOutlined style={{ fontSize: 24, color: '#52c41a', marginBottom: 8 }} />
-                  <div>暂无活动告警</div>
-                </div>
-              )}
-            </Spin>
-          </Card>
-        </Col>
-      </Row>
-
-      {/* 资源趋势图 */}
-      <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+      {/* Charts Row */}
+      <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
         <Col xs={24} lg={16}>
-          <Card
-            title="资源趋势"
-            size="small"
-            extra={
-              <Select
-                value={timeRange}
-                onChange={setTimeRange}
-                size="small"
-                style={{ width: 100 }}
-                options={[
-                  { label: '1 小时', value: '1h' },
-                  { label: '6 小时', value: '6h' },
-                  { label: '24 小时', value: '24h' },
-                ]}
-              />
-            }
-          >
-            {metricsError ? (
-              <Alert message={metricsError} type="warning" showIcon style={{ marginTop: 8 }} />
-            ) : cpuSeries.length > 0 || memSeries.length > 0 ? (
-              <ReactECharts
-                option={{
-                  tooltip: { trigger: 'axis' },
-                  legend: { data: ['CPU 使用率', '内存使用率'], bottom: 0 },
-                  grid: { left: 50, right: 20, top: 20, bottom: 40 },
-                  xAxis: { type: 'time', axisLabel: { fontSize: 11 } },
-                  yAxis: { type: 'value', axisLabel: { formatter: '{value}%', fontSize: 11 }, max: 100 },
-                  series: [
-                    {
-                      name: 'CPU 使用率',
-                      type: 'line',
-                      smooth: true,
-                      showSymbol: false,
-                      data: cpuSeries.map((v: any) => [v[0] * 1000, parseFloat(v[1]).toFixed(2)]),
-                      lineStyle: { color: '#52c41a', width: 2 },
-                      areaStyle: { color: '#52c41a20' },
-                    },
-                    {
-                      name: '内存使用率',
-                      type: 'line',
-                      smooth: true,
-                      showSymbol: false,
-                      data: memSeries.map((v: any) => [v[0] * 1000, parseFloat(v[1]).toFixed(2)]),
-                      lineStyle: { color: '#1677ff', width: 2 },
-                      areaStyle: { color: '#1677ff20' },
-                    },
-                  ],
-                }}
-                style={{ height: 240 }}
-              />
-            ) : (
-              <div style={{ color: '#999', textAlign: 'center', paddingTop: 80 }}>暂无监控数据</div>
-            )}
-          </Card>
+          <div className="aiops-card">
+            <div className="aiops-card-header">
+              <div className="aiops-card-title">Resource Trend</div>
+              <Text type="secondary" style={{ fontSize: 12 }}>Cluster-wide CPU & Memory</Text>
+            </div>
+            <div className="aiops-card-body" style={{ paddingTop: 8 }}>
+              {metricsError ? (
+                <div style={{ textAlign: 'center', padding: '40px 0' }}>
+                  <Text type="secondary">{metricsError}</Text>
+                </div>
+              ) : cpuSeries.length > 0 || memSeries.length > 0 ? (
+                <ReactECharts option={chartOption} style={{ height: 220 }} notMerge />
+              ) : (
+                <Empty description="No monitoring data" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: '32px 0' }} />
+              )}
+            </div>
+          </div>
         </Col>
         <Col xs={24} lg={8}>
-          <Card title="告警分布" size="small">
-            <Row gutter={[8, 8]}>
-              <Col span={12}>
-                <Statistic title="Critical" value={criticalAlerts.length} valueStyle={{ color: '#ff4d4f' }} />
-              </Col>
-              <Col span={12}>
-                <Statistic title="Warning" value={warningAlerts.length} valueStyle={{ color: '#faad14' }} />
-              </Col>
-              <Col span={12}>
-                <Statistic title="Info" value={(alerts?.items?.filter((a) => a.severity === 'info') || []).length} />
-              </Col>
-              <Col span={12}>
-                <Statistic title="总计" value={firingCount} />
-              </Col>
-            </Row>
-          </Card>
+          <div className="aiops-card" style={{ height: '100%' }}>
+            <div className="aiops-card-header">
+              <div className="aiops-card-title">Alert Summary</div>
+              <Button type="link" size="small" onClick={() => navigate('/alerts/realtime')}>View all</Button>
+            </div>
+            <div className="aiops-card-body">
+              <Row gutter={[8, 16]}>
+                <Col span={12}>
+                  <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: 28, fontWeight: 700, color: '#dc2626' }}>{criticalAlerts.length}</div>
+                    <div style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 0.5 }}>Critical</div>
+                  </div>
+                </Col>
+                <Col span={12}>
+                  <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: 28, fontWeight: 700, color: '#d97706' }}>{warningAlerts.length}</div>
+                    <div style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 0.5 }}>Warning</div>
+                  </div>
+                </Col>
+              </Row>
+              <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid #f3f4f6' }}>
+                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>Cluster Health</div>
+                <Progress percent={Math.round(systemHealth)} strokeColor={healthColor} showInfo={false} size="small" />
+                <div style={{ fontSize: 12, color: healthColor, marginTop: 4, fontWeight: 500 }}>
+                  {systemHealth.toFixed(1)}% — {healthStatus === 'healthy' ? 'Healthy' : healthStatus === 'warning' ? 'Degraded' : 'Critical'}
+                </div>
+              </div>
+            </div>
+          </div>
+        </Col>
+      </Row>
+
+      {/* Active Alerts + Abnormal Pods */}
+      <Row gutter={[12, 12]}>
+        <Col xs={24} lg={14}>
+          <div className="aiops-card">
+            <div className="aiops-card-header">
+              <div className="aiops-card-title">Active Alerts</div>
+              <Button type="link" size="small" onClick={() => navigate('/alerts/realtime')}>View all →</Button>
+            </div>
+            <div className="aiops-card-body" style={{ padding: 0 }}>
+              <Spin spinning={loading}>
+                {alerts && alerts.items && alerts.items.length > 0 ? (
+                  <Table
+                    columns={alertColumns}
+                    dataSource={alerts.items.slice(0, 6)}
+                    rowKey="id"
+                    pagination={false}
+                    size="small"
+                    showHeader={true}
+                  />
+                ) : (
+                  <Empty description="No active alerts" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: '32px 0' }} />
+                )}
+              </Spin>
+            </div>
+          </div>
+        </Col>
+        <Col xs={24} lg={10}>
+          <div className="aiops-card">
+            <div className="aiops-card-header">
+              <div className="aiops-card-title">Infrastructure Status</div>
+              <Button type="link" size="small" onClick={() => navigate('/kubernetes/pods')}>Pods →</Button>
+            </div>
+            <div className="aiops-card-body" style={{ padding: 0 }}>
+              <Spin spinning={loading}>
+                {abnormalPods.length > 0 ? (
+                  <Table
+                    columns={podColumns}
+                    dataSource={abnormalPods.slice(0, 6)}
+                    rowKey="name"
+                    pagination={false}
+                    size="small"
+                  />
+                ) : (
+                  <div style={{ textAlign: 'center', padding: '32px 0' }}>
+                    <CheckCircleOutlined style={{ fontSize: 28, color: '#16a34a', marginBottom: 8 }} />
+                    <div style={{ fontSize: 13, color: '#6b7280' }}>All pods healthy</div>
+                    <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>{runningPods}/{pods.length} pods running</div>
+                  </div>
+                )}
+              </Spin>
+            </div>
+          </div>
         </Col>
       </Row>
     </div>

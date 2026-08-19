@@ -1,3 +1,128 @@
+/* ============================================================
+   AIOps Platform — Enterprise Design System v2.0
+   参考: Datadog / Grafana / Linear / 现代企业 SaaS
+   ============================================================ */
+
+:root {
+  /* === Brand Colors === */
+  --color-primary: #2563eb;
+  --color-primary-hover: #1d4ed8;
+  --color-primary-active: #1e40af;
+  --color-primary-light: #eff6ff;
+  --color-primary-border: #bfdbfe;
+
+  /* === Status Colors === */
+  --color-success: #16a34a;
+  --color-success-light: #f0fdf4;
+  --color-warning: #d97706;
+  --color-warning-light: #fffbeb;
+  --color-danger: #dc2626;
+  --color-danger-light: #fef2f2;
+  --color-critical: #b91c1c;
+  --color-info: #0891b2;
+  --color-info-light: #ecfeff;
+
+  /* === AI / Intelligence === */
+  --color-ai: #7c3aed;
+  --color-ai-light: #f5f3ff;
+
+  /* === Light Theme (Default) === */
+  --bg-app: #f6f8fa;
+  --bg-surface: #ffffff;
+  --bg-surface-hover: #f8fafc;
+  --bg-surface-active: #f1f5f9;
+  --bg-elevated: #ffffff;
+  --bg-sidebar: #ffffff;
+  --bg-sidebar-hover: #f1f5f9;
+  --bg-header: #ffffff;
+  --bg-input: #ffffff;
+
+  --text-primary: #111827;
+  --text-secondary: #4b5563;
+  --text-muted: #9ca3af;
+  --text-inverse: #ffffff;
+  --text-sidebar: #374151;
+  --text-sidebar-active: #2563eb;
+
+  --border-color: #e5e7eb;
+  --border-light: #f3f4f6;
+  --border-sidebar: #e5e7eb;
+
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 1px 3px 0 rgba(0, 0, 0, 0.08), 0 1px 2px -1px rgba(0, 0, 0, 0.05);
+  --shadow-lg: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+
+  /* === Spacing === */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* === Radius === */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+
+  /* === Typography === */
+  --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
+    Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace;
+
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-base: 13px;
+  --fs-md: 14px;
+  --fs-lg: 15px;
+  --fs-xl: 16px;
+  --fs-2xl: 18px;
+  --fs-3xl: 20px;
+  --fs-4xl: 24px;
+
+  --fw-normal: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  /* === Transition === */
+  --transition-fast: 120ms ease;
+  --transition-normal: 180ms ease;
+}
+
+/* === Dark Theme === */
+[data-theme='dark'] {
+  --bg-app: #0f172a;
+  --bg-surface: #1e293b;
+  --bg-surface-hover: #334155;
+  --bg-surface-active: #334155;
+  --bg-elevated: #334155;
+  --bg-sidebar: #1e293b;
+  --bg-sidebar-hover: #334155;
+  --bg-header: #1e293b;
+  --bg-input: #0f172a;
+
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --text-inverse: #0f172a;
+  --text-sidebar: #cbd5e1;
+  --text-sidebar-active: #60a5fa;
+
+  --border-color: #334155;
+  --border-light: #1e293b;
+  --border-sidebar: #334155;
+
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 1px 3px 0 rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+
+  --color-primary: #3b82f6;
+  --color-primary-light: #1e3a5f;
+}
+
+/* === Reset === */
 * {
   margin: 0;
   padding: 0;
@@ -10,29 +135,21 @@ html, body, #root {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
-    Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  font-family: var(--font-family);
+  font-size: var(--fs-md);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background: var(--bg-app);
+  color: var(--text-primary);
 }
 
-/* 滚动条样式 */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-thumb {
-  background: rgba(128, 128, 128, 0.3);
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(128, 128, 128, 0.5);
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
+/* === Scrollbar === */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-thumb { background: rgba(100, 116, 139, 0.3); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(100, 116, 139, 0.5); }
+::-webkit-scrollbar-track { background: transparent; }
 
-/* 登录页背景 */
+/* === Login === */
 .login-bg {
   min-height: 100vh;
   display: flex;
@@ -41,20 +158,314 @@ body {
   background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
 }
 
-/* 卡片悬浮效果 */
-.stat-card {
-  transition: transform 0.2s, box-shadow 0.2s;
-}
-.stat-card:hover {
-  transform: translateY(-2px);
+/* ============================================================
+   Enterprise Card System
+   ============================================================ */
+
+.aiops-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--transition-fast), border-color var(--transition-fast);
 }
 
-/* 代码块 */
+.aiops-card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.aiops-card-header {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-light);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.aiops-card-title {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  color: var(--text-primary);
+}
+
+.aiops-card-body {
+  padding: var(--space-4);
+}
+
+/* ============================================================
+   KPI Card — Compact (110-140px height)
+   ============================================================ */
+
+.kpi-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  min-height: 100px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  transition: all var(--transition-fast);
+  position: relative;
+  overflow: hidden;
+}
+
+.kpi-card:hover {
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-md);
+}
+
+.kpi-card .kpi-label {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.kpi-card .kpi-value {
+  font-size: var(--fs-4xl);
+  font-weight: var(--fw-bold);
+  color: var(--text-primary);
+  line-height: 1.1;
+  letter-spacing: -0.5px;
+}
+
+.kpi-card .kpi-sub {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.kpi-card .kpi-trend {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.kpi-card .kpi-trend.up { color: var(--color-danger); }
+.kpi-card .kpi-trend.down { color: var(--color-success); }
+
+.kpi-card .kpi-icon {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  font-size: 18px;
+  opacity: 0.12;
+}
+
+/* KPI with left accent bar */
+.kpi-card.accent-critical { border-left: 3px solid var(--color-critical); }
+.kpi-card.accent-warning { border-left: 3px solid var(--color-warning); }
+.kpi-card.accent-success { border-left: 3px solid var(--color-success); }
+.kpi-card.accent-info { border-left: 3px solid var(--color-info); }
+.kpi-card.accent-primary { border-left: 3px solid var(--color-primary); }
+
+/* ============================================================
+   Status Badge
+   ============================================================ */
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  line-height: 1.6;
+}
+
+.status-badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.status-badge.success { background: var(--color-success-light); color: var(--color-success); }
+.status-badge.warning { background: var(--color-warning-light); color: var(--color-warning); }
+.status-badge.danger { background: var(--color-danger-light); color: var(--color-danger); }
+.status-badge.critical { background: var(--color-danger-light); color: var(--color-critical); }
+.status-badge.info { background: var(--color-info-light); color: var(--color-info); }
+.status-badge.running { background: var(--color-primary-light); color: var(--color-primary); }
+.status-badge.running::before { animation: pulse-dot 2s infinite; }
+.status-badge.muted { background: var(--border-light); color: var(--text-muted); }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* ============================================================
+   Section Header
+   ============================================================ */
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-3);
+}
+
+.section-title {
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semibold);
+  color: var(--text-primary);
+}
+
+/* ============================================================
+   Code Block
+   ============================================================ */
+
 .code-block {
-  font-family: 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace;
-  font-size: 12px;
-  background: rgba(0, 0, 0, 0.05);
-  padding: 8px 12px;
-  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  background: var(--bg-surface-active);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
   overflow-x: auto;
+  border: 1px solid var(--border-light);
+}
+
+/* ============================================================
+   AI Accent
+   ============================================================ */
+
+.ai-accent {
+  background: linear-gradient(135deg, var(--color-ai), var(--color-info));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ============================================================
+   Ant Design Overrides — Enterprise
+   ============================================================ */
+
+.ant-card {
+  border-radius: var(--radius-md) !important;
+  border: 1px solid var(--border-color) !important;
+  box-shadow: var(--shadow-sm) !important;
+}
+
+.ant-card-head {
+  border-bottom: 1px solid var(--border-light) !important;
+  min-height: 44px !important;
+  padding: 0 var(--space-4) !important;
+}
+
+.ant-card-head-title {
+  font-size: var(--fs-md) !important;
+  font-weight: var(--fw-semibold) !important;
+  padding: var(--space-3) 0 !important;
+}
+
+.ant-card-body {
+  padding: var(--space-4) !important;
+}
+
+.ant-table {
+  border-radius: var(--radius-md) !important;
+  font-size: var(--fs-base) !important;
+}
+
+.ant-table-thead > tr > th {
+  font-size: var(--fs-xs) !important;
+  font-weight: var(--fw-semibold) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.3px !important;
+  color: var(--text-muted) !important;
+  background: var(--bg-surface-active) !important;
+  border-bottom: 1px solid var(--border-color) !important;
+  padding: 8px 12px !important;
+}
+
+.ant-table-tbody > tr > td {
+  padding: 10px 12px !important;
+  border-bottom: 1px solid var(--border-light) !important;
+}
+
+.ant-table-tbody > tr:hover > td {
+  background: var(--bg-surface-hover) !important;
+}
+
+.ant-drawer-content {
+  border-radius: var(--radius-lg) 0 0 var(--radius-lg) !important;
+  background: var(--bg-surface) !important;
+}
+
+.ant-drawer-header {
+  border-bottom: 1px solid var(--border-color) !important;
+  padding: var(--space-4) !important;
+}
+
+.ant-btn {
+  border-radius: var(--radius-sm) !important;
+  font-size: var(--fs-base) !important;
+  font-weight: var(--fw-medium) !important;
+}
+
+.ant-tag {
+  border-radius: var(--radius-sm) !important;
+  font-size: var(--fs-xs) !important;
+  padding: 2px 8px !important;
+}
+
+.ant-input, .ant-select-selector {
+  border-radius: var(--radius-sm) !important;
+  font-size: var(--fs-base) !important;
+}
+
+.ant-modal-content {
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--shadow-lg) !important;
+}
+
+.ant-tabs-tab {
+  font-size: var(--fs-base) !important;
+  font-weight: var(--fw-medium) !important;
+}
+
+.ant-statistic-title {
+  font-size: var(--fs-xs) !important;
+  color: var(--text-muted) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.5px !important;
+}
+
+.ant-statistic-content {
+  font-size: var(--fs-3xl) !important;
+  font-weight: var(--fw-bold) !important;
+}
+
+/* Page container — no white card wrapper */
+.aiops-page {
+  padding: 0;
+}
+
+.aiops-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-4);
+}
+
+.aiops-page-title {
+  font-size: var(--fs-2xl);
+  font-weight: var(--fw-bold);
+  color: var(--text-primary);
+  letter-spacing: -0.3px;
+}
+
+.aiops-page-subtitle {
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  margin-top: 2px;
 }

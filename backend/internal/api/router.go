@@ -3,11 +3,14 @@ package api
 import (
 	"github.com/aiops/aiops-platform/internal/audit"
 	"github.com/aiops/aiops-platform/internal/ai"
+	"github.com/aiops/aiops-platform/internal/auth"
+	"github.com/aiops/aiops-platform/internal/automation"
 	"github.com/aiops/aiops-platform/internal/handler"
 	"github.com/aiops/aiops-platform/internal/incident"
 	"github.com/aiops/aiops-platform/internal/middleware"
 	"github.com/aiops/aiops-platform/internal/redisutil"
 	"github.com/aiops/aiops-platform/internal/topology"
+	"github.com/aiops/aiops-platform/internal/workflow"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	swaggerFiles "github.com/swaggo/files"
@@ -24,9 +27,12 @@ type Deps struct {
 	Logs       *handler.LogsHandler
 	AI         *handler.AIHandler
 	Automation *handler.AutomationHandler
+	AutomationAction *automation.Handler
+	Workflow        *workflow.Handler
 	Jenkins    *handler.JenkinsHandler
 	ArgoCD     *handler.ArgoCDHandler
 	Auth       *handler.AuthHandler
+	AuthService *auth.Service
 	Audit      *handler.AuditHandler
 	Incident   *incident.Handler
 	IncidentRCA *handler.IncidentRCAHandler
@@ -43,6 +49,8 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 
 	r := gin.New()
 	r.Use(gin.Recovery())
+	// RequestID 必须在 RequestLog 之前，这样日志中可以携带 request_id。
+	r.Use(middleware.RequestID())
 	r.Use(middleware.RequestLog())
 
 	// /metrics 在 Metrics() 中间件之前注册，避免自统计。
@@ -129,6 +137,38 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 			v1.POST("/automation/deployments/:name/scale", deps.Automation.ScaleDeployment)
 		}
 
+		if deps.AutomationAction != nil {
+			authGroup := v1.Group("")
+			if deps.AuthService != nil {
+				authGroup.Use(auth.AuthMiddleware(deps.AuthService))
+			}
+			authGroup.POST("/actions", auth.RequirePermission("automation", "create"), deps.AutomationAction.Create)
+			authGroup.GET("/actions", deps.AutomationAction.List)
+			authGroup.GET("/actions/pending-approval", deps.AutomationAction.PendingApproval)
+			authGroup.GET("/actions/:id", deps.AutomationAction.Get)
+			authGroup.POST("/actions/:id/approve", auth.RequirePermission("automation", "approve"), deps.AutomationAction.Approve)
+			authGroup.POST("/actions/:id/reject", auth.RequirePermission("automation", "approve"), deps.AutomationAction.Reject)
+			authGroup.POST("/actions/:id/dry-run", deps.AutomationAction.DryRun)
+			authGroup.POST("/actions/:id/execute", auth.RequirePermission("automation", "execute"), deps.AutomationAction.Execute)
+			authGroup.POST("/actions/:id/cancel", auth.RequirePermission("automation", "cancel"), deps.AutomationAction.Cancel)
+			authGroup.GET("/actions/:id/executions", deps.AutomationAction.Executions)
+			authGroup.GET("/automation/audit", auth.RequirePermission("automation", "audit"), deps.AutomationAction.Audit)
+		}
+
+		if deps.Workflow != nil {
+			wfGroup := v1.Group("")
+			if deps.AuthService != nil {
+				wfGroup.Use(auth.AuthMiddleware(deps.AuthService))
+			}
+			wfGroup.POST("/workflows", deps.Workflow.Create)
+			wfGroup.GET("/workflows", deps.Workflow.List)
+			wfGroup.GET("/workflows/:id", deps.Workflow.Get)
+			wfGroup.POST("/workflows/:id/submit", deps.Workflow.Submit)
+			wfGroup.POST("/workflows/:id/approve", auth.RequirePermission("automation", "approve"), deps.Workflow.Approve)
+			wfGroup.POST("/workflows/:id/execute", auth.RequirePermission("automation", "execute"), deps.Workflow.Execute)
+			wfGroup.POST("/workflows/:id/cancel", deps.Workflow.Cancel)
+		}
+
 		if deps.Jenkins != nil {
 			v1.GET("/jenkins/jobs", deps.Jenkins.ListJobs)
 			v1.GET("/jenkins/jobs/:name/builds", deps.Jenkins.ListBuilds)
@@ -165,6 +205,13 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 			v1.POST("/incidents/:id/close", deps.Incident.Close)
 			v1.GET("/incidents/:id/signals", deps.Incident.Signals)
 			v1.GET("/incidents/:id/timeline", deps.Incident.Timeline)
+			if deps.AutomationAction != nil {
+				incAuth := v1.Group("")
+				if deps.AuthService != nil {
+					incAuth.Use(auth.AuthMiddleware(deps.AuthService))
+				}
+				incAuth.POST("/incidents/:id/actions", auth.RequirePermission("automation", "create"), deps.AutomationAction.CreateFromIncident)
+			}
 			if deps.IncidentRCA != nil {
 				v1.POST("/incidents/:id/rca", deps.IncidentRCA.Analyze)
 				v1.GET("/incidents/:id/rca", deps.IncidentRCA.GetLatest)

@@ -15,6 +15,8 @@ import MonitoringOverview from '@/pages/Monitoring/Overview'
 import PromQL from '@/pages/Monitoring/PromQL'
 import LogSearch from '@/pages/Logs/Search'
 import AIAssistant from '@/pages/AI/Assistant'
+import AutomationActions from '@/pages/Automation/Actions'
+import Workflows from '@/pages/Automation/Workflows'
 import Incidents from '@/pages/AIOps/Incidents'
 import Anomaly from '@/pages/AIOps/Anomaly'
 import Topology from '@/pages/AIOps/Topology'
@@ -61,6 +63,8 @@ export const router = createBrowserRouter([
       // AI
       { path: 'ai', element: <AIAssistant /> },
       // Automation
+      { path: 'automation/actions', element: <AutomationActions /> },
+      { path: 'automation/workflows', element: <Workflows /> },
       { path: 'automation/k8s', element: <Placeholder title="Kubernetes 运维" phase="Phase 9" /> },
       { path: 'automation/jenkins', element: <Placeholder title="Jenkins" phase="Phase 10" /> },
       { path: 'automation/argocd', element: <Placeholder title="ArgoCD" phase="Phase 10" /> },

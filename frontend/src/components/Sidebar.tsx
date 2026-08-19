@@ -10,46 +10,43 @@ import {
   RobotOutlined,
   SettingOutlined,
   ToolOutlined,
+  ApartmentOutlined,
 } from '@ant-design/icons'
 import { useAppStore } from '@/stores/app'
 
 const { Sider } = Layout
 
 const menuItems = [
-  { key: '/', icon: <DashboardOutlined />, label: '首页' },
+  { key: '/', icon: <DashboardOutlined />, label: 'Overview' },
   {
     key: '/kubernetes',
     icon: <CloudOutlined />,
-    label: 'Kubernetes',
+    label: 'Infrastructure',
     children: [
-      { key: '/kubernetes/clusters', label: '集群' },
-      { key: '/kubernetes/nodes', label: 'Node' },
-      { key: '/kubernetes/namespaces', label: 'Namespace' },
-      { key: '/kubernetes/pods', label: 'Pod' },
-      { key: '/kubernetes/deployments', label: 'Deployment' },
-      { key: '/kubernetes/services', label: 'Service' },
+      { key: '/kubernetes/clusters', label: 'Clusters' },
+      { key: '/kubernetes/nodes', label: 'Nodes' },
+      { key: '/kubernetes/namespaces', label: 'Namespaces' },
+      { key: '/kubernetes/pods', label: 'Pods' },
+      { key: '/kubernetes/deployments', label: 'Deployments' },
+      { key: '/kubernetes/services', label: 'Services' },
     ],
   },
   {
     key: '/monitoring',
     icon: <MonitorOutlined />,
-    label: '监控',
+    label: 'Observability',
     children: [
-      { key: '/monitoring/host', label: '主机监控' },
-      { key: '/monitoring/k8s', label: 'Kubernetes 监控' },
-      { key: '/monitoring/pod', label: 'Pod 监控' },
+      { key: '/monitoring/overview', label: 'Metrics' },
       { key: '/monitoring/promql', label: 'PromQL' },
     ],
   },
   {
     key: '/alerts',
     icon: <AlertOutlined />,
-    label: '告警中心',
+    label: 'Alerts',
     children: [
-      { key: '/alerts/realtime', label: '实时告警' },
-      { key: '/alerts/history', label: '告警历史' },
-      { key: '/alerts/aggregate', label: '告警聚合' },
-      { key: '/alerts/noise', label: '告警降噪' },
+      { key: '/alerts/realtime', label: 'Active Alerts' },
+      { key: '/alerts/history', label: 'History' },
     ],
   },
   {
@@ -57,32 +54,31 @@ const menuItems = [
     icon: <ThunderboltOutlined />,
     label: 'AIOps',
     children: [
-      { key: '/aiops/incidents', label: '事件中心' },
-      { key: '/aiops/anomaly', label: '异常检测' },
-      { key: '/aiops/rca', label: '根因分析' },
-      { key: '/aiops/topology', label: '服务拓扑' },
+      { key: '/aiops/incidents', label: 'Incidents' },
+      { key: '/aiops/anomaly', label: 'Anomaly Detection' },
+      { key: '/aiops/topology', label: 'Service Topology' },
     ],
   },
   {
     key: '/logs',
     icon: <FileTextOutlined />,
-    label: '日志中心',
+    label: 'Logs',
     children: [
-      { key: '/logs/search', label: '日志搜索' },
-      { key: '/logs/analyze', label: '日志分析' },
+      { key: '/logs/search', label: 'Log Search' },
     ],
   },
   {
     key: '/ai',
     icon: <RobotOutlined />,
-    label: 'AI 助手',
+    label: 'AI Assistant',
   },
   {
     key: '/automation',
     icon: <ToolOutlined />,
-    label: '自动化',
+    label: 'Automation',
     children: [
-      { key: '/automation/k8s', label: 'Kubernetes' },
+      { key: '/automation/actions', label: 'Actions' },
+      { key: '/automation/workflows', label: 'Workflows' },
       { key: '/automation/jenkins', label: 'Jenkins' },
       { key: '/automation/argocd', label: 'ArgoCD' },
     ],
@@ -90,11 +86,10 @@ const menuItems = [
   {
     key: '/system',
     icon: <SettingOutlined />,
-    label: '系统管理',
+    label: 'Administration',
     children: [
-      { key: '/system/users', label: '用户管理' },
-      { key: '/system/roles', label: '角色权限' },
-      { key: '/system/audit', label: '审计日志' },
+      { key: '/system/users', label: 'Users' },
+      { key: '/system/audit', label: 'Audit Logs' },
     ],
   },
 ]
@@ -115,14 +110,16 @@ export default function Sidebar() {
       collapsible
       collapsed={collapsed}
       width={220}
-      theme={isDark ? 'dark' : 'light'}
+      theme="light"
       style={{
         overflow: 'auto',
         height: '100vh',
         position: 'sticky',
         top: 0,
         left: 0,
-        borderRight: isDark ? 'none' : '1px solid rgba(0,0,0,0.06)',
+        background: isDark ? '#1e293b' : '#ffffff',
+        borderRight: `1px solid ${isDark ? '#334155' : '#e5e7eb'}`,
+        boxShadow: isDark ? 'none' : '0 1px 3px rgba(0,0,0,0.04)',
       }}
     >
       <div
@@ -130,22 +127,36 @@ export default function Sidebar() {
           height: 56,
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'center',
-          color: isDark ? '#fff' : '#001529',
-          fontSize: collapsed ? 14 : 18,
-          fontWeight: 600,
-          borderBottom: isDark ? '1px solid rgba(255,255,255,0.1)' : '1px solid rgba(0,0,0,0.06)',
+          justifyContent: collapsed ? 'center' : 'flex-start',
+          paddingLeft: collapsed ? 0 : 20,
+          color: isDark ? '#f1f5f9' : '#111827',
+          fontSize: collapsed ? 14 : 15,
+          fontWeight: 700,
+          borderBottom: `1px solid ${isDark ? '#334155' : '#f3f4f6'}`,
+          letterSpacing: -0.2,
         }}
       >
-        {collapsed ? 'AIO' : 'AIOps 平台'}
+        {collapsed ? (
+          <ApartmentOutlined style={{ fontSize: 20, color: '#2563eb' }} />
+        ) : (
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <ApartmentOutlined style={{ color: '#2563eb', fontSize: 18 }} />
+            <span>AIOps Platform</span>
+          </span>
+        )}
       </div>
       <Menu
-        theme={isDark ? 'dark' : 'light'}
+        theme="light"
         mode="inline"
         selectedKeys={[selectedKey]}
         defaultOpenKeys={[openKey]}
         items={menuItems}
         onClick={({ key }) => navigate(key)}
+        style={{
+          borderRight: 'none',
+          background: 'transparent',
+          padding: '8px 0',
+        }}
       />
     </Sider>
   )

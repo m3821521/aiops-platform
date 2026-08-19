@@ -3,6 +3,7 @@ export interface ApiResponse<T = any> {
   code: number
   message: string
   data: T
+  request_id?: string
 }
 
 // 分页响应
