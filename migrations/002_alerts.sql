@@ -1,0 +1,26 @@
+-- 告警表：存储从 Alertmanager 接收的告警，以及人工确认/关闭状态。
+CREATE TABLE IF NOT EXISTS alerts (
+    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+    fingerprint VARCHAR(255) NOT NULL COMMENT 'Alertmanager 告警指纹，唯一标识',
+    alertname   VARCHAR(255) NOT NULL COMMENT '告警名称',
+    severity    VARCHAR(32)  NOT NULL DEFAULT 'warning' COMMENT 'critical/warning/info',
+    status      VARCHAR(32)  NOT NULL DEFAULT 'firing' COMMENT 'firing/acknowledged/resolved/suppressed',
+    instance    VARCHAR(255) DEFAULT NULL COMMENT '告警实例',
+    pod         VARCHAR(255) DEFAULT NULL COMMENT '关联 Pod',
+    namespace   VARCHAR(255) DEFAULT NULL COMMENT '关联命名空间',
+    service     VARCHAR(255) DEFAULT NULL COMMENT '关联服务',
+    node        VARCHAR(255) DEFAULT NULL COMMENT '关联节点',
+    labels      JSON         DEFAULT NULL COMMENT '完整 labels',
+    annotations JSON         DEFAULT NULL COMMENT '完整 annotations',
+    starts_at   DATETIME     NOT NULL COMMENT '告警开始时间',
+    ends_at     DATETIME     DEFAULT NULL COMMENT '告警结束时间（resolved 时填写）',
+    created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    deleted_at  DATETIME     DEFAULT NULL,
+    UNIQUE KEY uk_fingerprint (fingerprint),
+    KEY idx_alertname (alertname),
+    KEY idx_severity (severity),
+    KEY idx_status (status),
+    KEY idx_starts_at (starts_at),
+    KEY idx_deleted_at (deleted_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='告警表';

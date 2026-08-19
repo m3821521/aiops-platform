@@ -1,0 +1,70 @@
+# 复制为 config.yaml 后按本机环境修改。
+# config.yaml 已加入 .gitignore，避免把密码提交到 Git。
+
+server:
+  host: "0.0.0.0"
+  port: "8080"
+  mode: debug   # debug / release
+
+log:
+  level: info   # debug / info / warn / error
+
+mysql:
+  host: 127.0.0.1
+  port: 3306
+  user: aiops
+  password: aiops123
+  database: aiops
+  charset: utf8mb4
+  max_idle: 10
+  max_open: 50
+
+redis:
+  address: 127.0.0.1:6379
+  password: ""
+  db: 0
+
+# 集群清单文件路径（相对项目根目录或绝对路径）
+cluster:
+  config_path: configs/clusters.yaml
+
+# Prometheus API 地址和查询超时
+prometheus:
+  address: http://127.0.0.1:9090
+  timeout: 30   # 秒
+
+# Elasticsearch 日志查询
+elasticsearch:
+  address: http://127.0.0.1:9200
+  index: filebeat-*
+  username: ""
+  password: ""
+  timeout: 30
+
+# AI 运维助手（可选，默认关闭）
+ai:
+  enabled: false
+  provider: openai          # openai / azure / ollama / custom
+  base_url: https://api.openai.com/v1
+  api_key: ""               # 不要提交到 Git
+  model: gpt-4o-mini
+  timeout: 60
+
+# Jenkins CI/CD 集成
+jenkins:
+  url: http://127.0.0.1:8080
+  username: admin
+  token: ""                 # Jenkins API Token，不要提交到 Git
+  timeout: 30
+
+# ArgoCD GitOps 集成
+argocd:
+  url: https://argocd.example.com
+  token: ""                 # ArgoCD API Token，不要提交到 Git
+  timeout: 30
+
+# 认证与权限
+auth:
+  enabled: false            # 开发环境可关闭，生产环境必须开启
+  jwt_secret: "change-me-to-a-random-secret"  # 生产环境必须修改
+  jwt_expiration: 24        # Token 有效期（小时）

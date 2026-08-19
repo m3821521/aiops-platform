@@ -1,0 +1,48 @@
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: aiops
+      MYSQL_USER: aiops
+      MYSQL_PASSWORD: aiops123
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uaiops", "-paiops123"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  aiops:
+    build: .
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      CONFIG_PATH: /app/configs/config.yaml
+    volumes:
+      - ./configs/config.docker.yaml:/app/configs/config.yaml:ro
+      - ./configs/clusters.example.yaml:/app/configs/clusters.yaml:ro
+      # 本机 kubeconfig，仅开发环境使用
+      - ${USERPROFILE}/.kube:/home/aiops/.kube:ro
+
+volumes:
+  mysql-data:

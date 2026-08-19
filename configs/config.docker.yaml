@@ -1,0 +1,60 @@
+server:
+  host: "0.0.0.0"
+  port: "8080"
+  mode: release
+
+log:
+  level: info
+
+mysql:
+  host: mysql
+  port: 3306
+  user: aiops
+  password: aiops123
+  database: aiops
+  charset: utf8mb4
+  max_idle: 10
+  max_open: 50
+
+redis:
+  address: redis:6379
+  password: ""
+  db: 0
+
+cluster:
+  config_path: configs/clusters.yaml
+
+prometheus:
+  address: http://prometheus:9090
+  timeout: 30
+
+elasticsearch:
+  address: http://elasticsearch:9200
+  index: filebeat-*
+  username: ""
+  password: ""
+  timeout: 30
+
+ai:
+  enabled: false
+  provider: openai
+  base_url: https://api.openai.com/v1
+  api_key: ""
+  model: gpt-4o-mini
+  timeout: 60
+
+jenkins:
+  url: http://jenkins:8080
+  username: admin
+  token: ""
+  timeout: 30
+
+argocd:
+  url: https://argocd.example.com
+  token: ""
+  timeout: 30
+
+auth:
+  enabled: false
+  jwt_secret: "aiops-default-secret-change-in-production"
+  jwt_expiration: 24

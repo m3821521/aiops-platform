@@ -1,0 +1,32 @@
+# Binaries
+bin/
+dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go
+vendor/
+coverage.out
+*.test
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Logs
+logs/
+*.log
+
+# Local secrets — never commit kubeconfig / tokens
+configs/config.yaml
+configs/clusters.yaml
+secrets/
+*.kubeconfig
+kubeconfig
+
+# OS
+.DS_Store
+Thumbs.db

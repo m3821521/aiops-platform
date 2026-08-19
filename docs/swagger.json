@@ -1,0 +1,133 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "AIOps Platform API",
+    "description": "企业级智能运维平台第一/二阶段接口：健康检查 + Kubernetes 资源查询。",
+    "version": "0.1.0"
+  },
+  "basePath": "/",
+  "schemes": ["http"],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": ["health"],
+        "summary": "存活检查",
+        "responses": { "200": { "description": "进程正常" } }
+      }
+    },
+    "/ready": {
+      "get": {
+        "tags": ["health"],
+        "summary": "就绪检查（MySQL / Redis）",
+        "responses": {
+          "200": { "description": "依赖正常" },
+          "503": { "description": "依赖异常" }
+        }
+      }
+    },
+    "/api/v1/clusters": {
+      "get": {
+        "tags": ["kubernetes"],
+        "summary": "列出已启用的 Kubernetes 集群",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/nodes": {
+      "get": {
+        "tags": ["kubernetes"],
+        "summary": "查询 Node",
+        "parameters": [
+          { "name": "cluster", "in": "query", "type": "string", "description": "集群名，省略则用第一个启用集群" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/namespaces": {
+      "get": {
+        "tags": ["kubernetes"],
+        "summary": "查询 Namespace",
+        "parameters": [
+          { "name": "cluster", "in": "query", "type": "string" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/pods": {
+      "get": {
+        "tags": ["kubernetes"],
+        "summary": "查询 Pod",
+        "parameters": [
+          { "name": "cluster", "in": "query", "type": "string" },
+          { "name": "namespace", "in": "query", "type": "string", "description": "省略则查询全部命名空间" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/deployments": {
+      "get": {
+        "tags": ["kubernetes"],
+        "summary": "查询 Deployment",
+        "parameters": [
+          { "name": "cluster", "in": "query", "type": "string" },
+          { "name": "namespace", "in": "query", "type": "string" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/statefulsets": {
+      "get": {
+        "tags": ["kubernetes"],
+        "summary": "查询 StatefulSet",
+        "parameters": [
+          { "name": "cluster", "in": "query", "type": "string" },
+          { "name": "namespace", "in": "query", "type": "string" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/daemonsets": {
+      "get": {
+        "tags": ["kubernetes"],
+        "summary": "查询 DaemonSet",
+        "parameters": [
+          { "name": "cluster", "in": "query", "type": "string" },
+          { "name": "namespace", "in": "query", "type": "string" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/services": {
+      "get": {
+        "tags": ["kubernetes"],
+        "summary": "查询 Service",
+        "parameters": [
+          { "name": "cluster", "in": "query", "type": "string" },
+          { "name": "namespace", "in": "query", "type": "string" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/configmaps": {
+      "get": {
+        "tags": ["kubernetes"],
+        "summary": "查询 ConfigMap（只返回名称和 key 数量）",
+        "parameters": [
+          { "name": "cluster", "in": "query", "type": "string" },
+          { "name": "namespace", "in": "query", "type": "string" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/secrets": {
+      "get": {
+        "tags": ["kubernetes"],
+        "summary": "查询 Secret 元数据（绝不返回明文）",
+        "parameters": [
+          { "name": "cluster", "in": "query", "type": "string" },
+          { "name": "namespace", "in": "query", "type": "string" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    }
+  }
+}

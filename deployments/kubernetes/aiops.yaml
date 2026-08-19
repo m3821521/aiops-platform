@@ -1,0 +1,130 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aiops
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aiops-config
+  namespace: aiops
+data:
+  config.yaml: |
+    server:
+      host: "0.0.0.0"
+      port: "8080"
+      mode: release
+    log:
+      level: info
+    mysql:
+      host: mysql
+      port: 3306
+      user: aiops
+      password: CHANGE_ME
+      database: aiops
+      charset: utf8mb4
+      max_idle: 10
+      max_open: 50
+    redis:
+      address: redis:6379
+      password: ""
+      db: 0
+    cluster:
+      config_path: /app/configs/clusters.yaml
+  clusters.yaml: |
+    clusters:
+      - name: in-cluster
+        enabled: true
+        description: 当前 Kubernetes 集群
+        auth_type: incluster
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aiops-platform
+  namespace: aiops
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aiops-platform
+  template:
+    metadata:
+      labels:
+        app: aiops-platform
+    spec:
+      serviceAccountName: aiops-platform
+      containers:
+        - name: server
+          image: aiops-platform:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: CONFIG_PATH
+              value: /app/configs/config.yaml
+          volumeMounts:
+            - name: config
+              mountPath: /app/configs
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 20
+      volumes:
+        - name: config
+          configMap:
+            name: aiops-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aiops-platform
+  namespace: aiops
+spec:
+  selector:
+    app: aiops-platform
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aiops-platform
+  namespace: aiops
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aiops-platform-reader
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "namespaces", "pods", "services", "configmaps", "secrets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: aiops-platform-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: aiops-platform-reader
+subjects:
+  - kind: ServiceAccount
+    name: aiops-platform
+    namespace: aiops

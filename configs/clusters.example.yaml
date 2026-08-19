@@ -1,0 +1,23 @@
+# 复制为 clusters.yaml 后使用。
+# clusters.yaml 已加入 .gitignore。
+#
+# auth_type 取值：
+#   kubeconfig      — 使用本地 kubeconfig 文件路径（不要把文件内容贴进 Git）
+#   serviceaccount  — 使用 API Server + Token 文件 + CA 证书文件
+#   incluster       — 程序跑在 Kubernetes 里时，使用 Pod 自带的 ServiceAccount
+
+clusters:
+  - name: local
+    enabled: true
+    description: 本机开发集群
+    auth_type: kubeconfig
+    kubeconfig_path: "~/.kube/config"
+
+  # 示例：ServiceAccount（token/ca 用文件路径，不要把明文写进仓库）
+  # - name: prod
+  #   enabled: false
+  #   description: 生产集群
+  #   auth_type: serviceaccount
+  #   api_server: https://kubernetes.example.com:6443
+  #   token_file: secrets/prod/token
+  #   ca_file: secrets/prod/ca.crt
