@@ -16,6 +16,7 @@ node_modules/
 frontend/dist/
 web/dist/
 *.tsbuildinfo
+.vite/
 
 # IDE
 .idea/
