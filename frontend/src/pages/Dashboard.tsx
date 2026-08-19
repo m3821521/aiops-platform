@@ -84,10 +84,13 @@ export default function Dashboard() {
     const seconds = timeRange === '1h' ? 3600 : timeRange === '6h' ? 21600 : 86400
     const end = Math.floor(Date.now() / 1000)
     const start = end - seconds
+    // 后端要求 RFC3339 格式时间和 duration 格式 step
+    const startStr = new Date(start * 1000).toISOString()
+    const endStr = new Date(end * 1000).toISOString()
     try {
       const [cpuData, memData] = await Promise.all([
-        metricsApi.range({ query: '100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)', start: String(start), end: String(end), step: '60' }).catch(() => null),
-        metricsApi.range({ query: '(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100', start: String(start), end: String(end), step: '60' }).catch(() => null),
+        metricsApi.range({ query: '100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)', start: startStr, end: endStr, step: '60s' }).catch(() => null),
+        metricsApi.range({ query: '(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100', start: startStr, end: endStr, step: '60s' }).catch(() => null),
       ])
       if (cpuData?.data?.result?.[0]?.values) setCpuSeries(cpuData.data.result[0].values)
       if (memData?.data?.result?.[0]?.values) setMemSeries(memData.data.result[0].values)

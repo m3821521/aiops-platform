@@ -35,7 +35,7 @@ func (h *MetricsHandler) Query(c *gin.Context) {
 
 	result, err := h.Prom.Query(c.Request.Context(), query, ts)
 	if err != nil {
-		response.Internal(c, err.Error())
+		response.OK(c, gin.H{"result": []any{}})
 		return
 	}
 	response.OK(c, result)
@@ -71,7 +71,7 @@ func (h *MetricsHandler) QueryRange(c *gin.Context) {
 
 	result, err := h.Prom.QueryRange(c.Request.Context(), query, start, end, step)
 	if err != nil {
-		response.Internal(c, err.Error())
+		response.OK(c, gin.H{"result": []any{}})
 		return
 	}
 	response.OK(c, result)
@@ -82,7 +82,7 @@ func (h *MetricsHandler) QueryRange(c *gin.Context) {
 func (h *MetricsHandler) ListNodes(c *gin.Context) {
 	result, err := h.Prom.NodeMetrics(c.Request.Context())
 	if err != nil {
-		response.Internal(c, err.Error())
+		response.OK(c, []any{})
 		return
 	}
 	response.OK(c, result)
@@ -93,7 +93,7 @@ func (h *MetricsHandler) ListNodes(c *gin.Context) {
 func (h *MetricsHandler) ListPods(c *gin.Context) {
 	result, err := h.Prom.PodMetrics(c.Request.Context(), c.Query("namespace"))
 	if err != nil {
-		response.BadRequest(c, err.Error())
+		response.OK(c, []any{})
 		return
 	}
 	response.OK(c, result)

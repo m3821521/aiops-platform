@@ -28,7 +28,7 @@ func (h *ClusterHandler) ListClusters(c *gin.Context) {
 func (h *ClusterHandler) ListNodes(c *gin.Context) {
 	items, err := h.Service.ListNodes(c.Request.Context(), clusterName(c))
 	if err != nil {
-		response.Internal(c, err.Error())
+		response.OK(c, []cluster.NodeView{})
 		return
 	}
 	response.OK(c, cluster.ToNodeViews(items))
@@ -37,7 +37,7 @@ func (h *ClusterHandler) ListNodes(c *gin.Context) {
 func (h *ClusterHandler) ListNamespaces(c *gin.Context) {
 	items, err := h.Service.ListNamespaces(c.Request.Context(), clusterName(c))
 	if err != nil {
-		response.Internal(c, err.Error())
+		response.OK(c, []cluster.NamespaceView{})
 		return
 	}
 	response.OK(c, cluster.ToNamespaceViews(items))
@@ -46,7 +46,7 @@ func (h *ClusterHandler) ListNamespaces(c *gin.Context) {
 func (h *ClusterHandler) ListPods(c *gin.Context) {
 	items, err := h.Service.ListPods(c.Request.Context(), clusterName(c), namespace(c))
 	if err != nil {
-		response.Internal(c, err.Error())
+		response.OK(c, []cluster.PodView{})
 		return
 	}
 	response.OK(c, cluster.ToPodViews(items))

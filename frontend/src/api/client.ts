@@ -28,12 +28,18 @@ request.interceptors.response.use(
       if (data.code === 0 || data.code === 200) {
         return data.data
       }
-      message.error(data.message || '请求失败')
+      // GET 请求不全局弹窗，由页面自行处理空状态/错误提示
+      const method = response.config.method?.toLowerCase()
+      if (method !== 'get') {
+        message.error(data.message || '请求失败')
+      }
       return Promise.reject(new Error(data.message || '请求失败'))
     }
     return response.data
   },
   (error: AxiosError) => {
+    const method = error.config?.method?.toLowerCase()
+    const isGet = method === 'get'
     if (error.response) {
       const status = error.response.status
       if (status === 401) {
@@ -42,25 +48,30 @@ request.interceptors.response.use(
         localStorage.removeItem('aiops_user')
         window.location.href = '/login'
       } else if (status === 403) {
-        message.error('权限不足')
+        if (!isGet) message.error('权限不足')
       } else if (status === 404) {
-        message.error('资源不存在')
+        if (!isGet) message.error('资源不存在')
       } else if (status === 409) {
-        message.error('操作冲突，请刷新后重试')
+        if (!isGet) message.error('操作冲突，请刷新后重试')
       } else if (status === 429) {
         message.error('请求过于频繁，请稍后再试')
       } else if (status >= 500) {
-        const data = error.response.data as ApiResponse
-        const rid = data?.request_id ? ` (${data.request_id})` : ''
-        message.error(`服务器错误${rid}`)
+        // GET 请求的 500 不全局弹窗（如 k8s/Prometheus 不可用），由页面显示空状态
+        if (!isGet) {
+          const data = error.response.data as ApiResponse
+          const rid = data?.request_id ? ` (${data.request_id})` : ''
+          message.error(`服务器错误${rid}`)
+        }
       } else {
-        const data = error.response.data as ApiResponse
-        message.error(data?.message || `请求失败 (${status})`)
+        if (!isGet) {
+          const data = error.response.data as ApiResponse
+          message.error(data?.message || `请求失败 (${status})`)
+        }
       }
     } else if (error.code === 'ECONNABORTED') {
-      message.error('请求超时')
+      if (!isGet) message.error('请求超时')
     } else {
-      message.error('网络错误')
+      if (!isGet) message.error('网络错误')
     }
     return Promise.reject(error)
   },
