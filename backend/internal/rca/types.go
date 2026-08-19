@@ -23,15 +23,7 @@ type AlertInfo struct {
 	Labels      map[string]string
 }
 
-// Evidence 是根因分析的一条证据。
-type Evidence struct {
-	Order       int       `json:"order"`
-	Description string    `json:"description"`
-	Timestamp   time.Time `json:"timestamp,omitempty"`
-	Severity    string    `json:"severity,omitempty"`
-}
-
-// TimelineEvent 是时间线上的一个事件。
+// TimelineEvent 是时间线上的一个事件（旧版，保留兼容）。
 type TimelineEvent struct {
 	Time        time.Time `json:"time"`
 	Service     string    `json:"service"`

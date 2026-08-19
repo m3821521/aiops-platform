@@ -2,9 +2,12 @@ package api
 
 import (
 	"github.com/aiops/aiops-platform/internal/audit"
+	"github.com/aiops/aiops-platform/internal/ai"
 	"github.com/aiops/aiops-platform/internal/handler"
+	"github.com/aiops/aiops-platform/internal/incident"
 	"github.com/aiops/aiops-platform/internal/middleware"
 	"github.com/aiops/aiops-platform/internal/redisutil"
+	"github.com/aiops/aiops-platform/internal/topology"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	swaggerFiles "github.com/swaggo/files"
@@ -25,6 +28,10 @@ type Deps struct {
 	ArgoCD     *handler.ArgoCDHandler
 	Auth       *handler.AuthHandler
 	Audit      *handler.AuditHandler
+	Incident   *incident.Handler
+	IncidentRCA *handler.IncidentRCAHandler
+	IncidentAI  *ai.IncidentAIHandler
+	Topology   *topology.Handler
 	RateLimit  *redisutil.RateLimiter
 }
 
@@ -95,6 +102,9 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 		}
 
 		if deps.Anomaly != nil {
+			v1.GET("/anomaly", deps.Anomaly.List)
+			v1.GET("/anomaly/active/count", deps.Anomaly.ActiveCount)
+			v1.GET("/anomaly/:id", deps.Anomaly.Get)
 			v1.POST("/anomaly/detect", deps.Anomaly.Detect)
 		}
 
@@ -109,6 +119,7 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 
 		if deps.AI != nil {
 			v1.POST("/ai/ask", deps.AI.Ask)
+			v1.GET("/ai/audit", deps.AI.ListAudit)
 		}
 
 		if deps.Automation != nil {
@@ -144,6 +155,36 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 
 		if deps.Audit != nil {
 			v1.GET("/audit-logs", deps.Audit.List)
+		}
+
+		if deps.Incident != nil {
+			v1.GET("/incidents", deps.Incident.List)
+			v1.GET("/incidents/:id", deps.Incident.Get)
+			v1.POST("/incidents/:id/acknowledge", deps.Incident.Acknowledge)
+			v1.POST("/incidents/:id/resolve", deps.Incident.Resolve)
+			v1.POST("/incidents/:id/close", deps.Incident.Close)
+			v1.GET("/incidents/:id/signals", deps.Incident.Signals)
+			v1.GET("/incidents/:id/timeline", deps.Incident.Timeline)
+			if deps.IncidentRCA != nil {
+				v1.POST("/incidents/:id/rca", deps.IncidentRCA.Analyze)
+				v1.GET("/incidents/:id/rca", deps.IncidentRCA.GetLatest)
+				v1.GET("/incidents/:id/rca/history", deps.IncidentRCA.GetHistory)
+				v1.POST("/incidents/:id/rca/reanalyze", deps.IncidentRCA.Reanalyze)
+				v1.GET("/incidents/:id/evidence", deps.IncidentRCA.GetEvidence)
+			}
+			if deps.IncidentAI != nil {
+				v1.POST("/incidents/:id/ai-analyze", deps.IncidentAI.Analyze)
+				v1.GET("/incidents/:id/ai-analysis", deps.IncidentAI.GetLatest)
+				v1.GET("/incidents/:id/ai-analysis/history", deps.IncidentAI.GetHistory)
+			}
+		}
+
+		if deps.Topology != nil {
+			v1.GET("/topology", deps.Topology.GetGraph)
+			v1.GET("/topology/nodes/:type/:name", deps.Topology.GetNode)
+			v1.GET("/topology/dependencies/:type/:name", deps.Topology.GetDependencies)
+			v1.GET("/topology/impact/:type/:name", deps.Topology.GetImpact)
+			v1.POST("/topology/cache/invalidate", deps.Topology.InvalidateCache)
 		}
 	}
 

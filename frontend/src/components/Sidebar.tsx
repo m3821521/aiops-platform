@@ -57,6 +57,7 @@ const menuItems = [
     icon: <ThunderboltOutlined />,
     label: 'AIOps',
     children: [
+      { key: '/aiops/incidents', label: '事件中心' },
       { key: '/aiops/anomaly', label: '异常检测' },
       { key: '/aiops/rca', label: '根因分析' },
       { key: '/aiops/topology', label: '服务拓扑' },

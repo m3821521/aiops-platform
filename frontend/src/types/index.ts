@@ -189,15 +189,6 @@ export interface Anomaly {
   baseline?: number
 }
 
-// RCA 结果
-export interface RCAResult {
-  root_cause: string
-  confidence: number
-  affected_services: string[]
-  evidence: { description: string; metric?: string; value?: string }[]
-  timeline: { time: string; event: string; type: string }[]
-}
-
 // 日志
 export interface LogEntry {
   timestamp: string
@@ -257,4 +248,267 @@ export interface AuditLog {
   result: string
   ip: string
   created_at: string
+}
+
+// Incident 事件
+export type IncidentStatus = 'open' | 'acknowledged' | 'resolved' | 'closed'
+export type IncidentSeverity = 'critical' | 'warning' | 'info'
+export type SignalType = 'alert' | 'anomaly' | 'log' | 'k8s_event' | 'metric'
+export type ResourceType = 'pod' | 'deployment' | 'service' | 'node' | 'namespace' | 'cluster'
+
+export interface IncidentSignal {
+  id: number
+  incident_id: number
+  signal_type: SignalType
+  signal_id: string
+  title: string
+  severity: IncidentSeverity
+  cluster?: string
+  namespace?: string
+  service?: string
+  resource_type?: string
+  resource_name?: string
+  timestamp: string
+  resolved: boolean
+  resolved_at?: string
+  metadata?: Record<string, any>
+  created_at: string
+  updated_at: string
+}
+
+export interface Incident {
+  id: number
+  title: string
+  severity: IncidentSeverity
+  status: IncidentStatus
+  cluster?: string
+  namespace?: string
+  service?: string
+  resource_type?: string
+  resource_name?: string
+  root_cause?: string
+  confidence?: number
+  impact?: string
+  summary?: string
+  signal_count: number
+  start_time: string
+  end_time?: string
+  duration?: string
+  created_at: string
+  updated_at: string
+  signals?: IncidentSignal[]
+}
+
+export interface IncidentListFilter {
+  status?: string
+  severity?: string
+  namespace?: string
+  service?: string
+  cluster?: string
+  keyword?: string
+  start_time?: string
+  end_time?: string
+}
+
+// Anomaly 异常检测记录
+export type AnomalyStatus = 'detected' | 'active' | 'resolved'
+export type AnomalyAlgorithm = 'static_threshold' | 'moving_average' | 'ewma' | 'z_score'
+
+export interface AnomalyRecord {
+  id: number
+  metric: string
+  resource_type?: string
+  resource_name?: string
+  namespace?: string
+  cluster?: string
+  timestamp: string
+  value: number
+  baseline?: number
+  expected_min?: number
+  expected_max?: number
+  anomaly_score: number
+  severity: IncidentSeverity
+  algorithm: AnomalyAlgorithm
+  reason?: string
+  status: AnomalyStatus
+  incident_id?: number
+  resolved_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface AnomalyListFilter {
+  cluster?: string
+  namespace?: string
+  resource_type?: string
+  resource_name?: string
+  severity?: string
+  algorithm?: string
+  status?: string
+  metric?: string
+  start_time?: string
+  end_time?: string
+}
+
+// Topology 拓扑
+export type TopologyNodeType = 'node' | 'pod' | 'deployment' | 'service' | 'ingress'
+export type TopologyRelation = 'owns' | 'runs_on' | 'selects' | 'routes_to'
+export type TopologyNodeStatus = 'healthy' | 'warning' | 'critical' | 'unknown'
+
+export interface TopologyNode {
+  id: string
+  type: TopologyNodeType
+  name: string
+  namespace?: string
+  cluster: string
+  status: TopologyNodeStatus
+  labels?: Record<string, string>
+  metadata?: Record<string, any>
+  incident_ids?: number[]
+  alert_count?: number
+  anomaly_count?: number
+}
+
+export interface TopologyEdge {
+  id: string
+  source: string
+  target: string
+  relation: TopologyRelation
+  cluster?: string
+}
+
+export interface TopologyGraph {
+  cluster: string
+  nodes: TopologyNode[]
+  edges: TopologyEdge[]
+}
+
+export interface TopologyDependency {
+  node: TopologyNode
+  upstream: TopologyNode[]
+  downstream: TopologyNode[]
+  parents: TopologyNode[]
+  children: TopologyNode[]
+}
+
+export interface TopologyImpact {
+  node: TopologyNode
+  affected_nodes: TopologyNode[]
+  edge_count: number
+}
+
+// RCA 根因分析
+export type RCAStatus = 'analyzing' | 'completed' | 'insufficient_evidence' | 'failed'
+export type EvidenceType = 'alert' | 'anomaly' | 'metric' | 'log' | 'event' | 'topology'
+
+export interface RCAEvidence {
+  id: string
+  type: EvidenceType
+  source: string
+  timestamp: string
+  resource_type?: string
+  resource_name?: string
+  namespace?: string
+  metric?: string
+  value?: number
+  expected?: string
+  severity?: string
+  description: string
+  score: number
+  related_signal?: string
+}
+
+export interface RCACandidate {
+  resource_type: string
+  resource_name: string
+  namespace?: string
+  root_cause: string
+  score: number
+  confidence: number
+  evidence: RCAEvidence[]
+  impact?: string[]
+  explanation: string
+}
+
+export interface RCATimelineItem {
+  timestamp: string
+  type: string
+  description: string
+  severity?: string
+  resource?: string
+}
+
+export interface RCAResult {
+  incident_id: number
+  status: RCAStatus
+  root_cause: string
+  confidence: number
+  candidates: RCACandidate[]
+  evidence: RCAEvidence[]
+  impact: string[]
+  timeline: RCATimelineItem[]
+  explanation: string
+  generated_at: string
+}
+
+// AI 分析结果
+export interface AIAnalysisResult {
+  summary: string
+  root_cause_explanation: string
+  confidence: number
+  evidence: AIEvidence[]
+  impact: AIImpactItem[]
+  recommendations: AIRecommendation[]
+  risks: AIRisk[]
+  next_actions: AIAction[]
+  data_sources: AIDataSourceStatus
+  generated_at: string
+  model?: string
+}
+
+export interface AIEvidence {
+  type: string
+  source: string
+  resource?: string
+  timestamp?: string
+  description: string
+  importance: string
+}
+
+export interface AIImpactItem {
+  resource_type: string
+  resource_name: string
+  namespace?: string
+  impact_level: string
+}
+
+export interface AIRecommendation {
+  priority: string
+  title: string
+  description: string
+  reason: string
+  risk: string
+  action_type: string
+}
+
+export interface AIRisk {
+  level: string
+  description: string
+}
+
+export interface AIAction {
+  order: number
+  title: string
+  description: string
+  reason: string
+}
+
+export interface AIDataSourceStatus {
+  alerts_available: boolean
+  anomalies_available: boolean
+  metrics_available: boolean
+  logs_available: boolean
+  events_available: boolean
+  topology_available: boolean
+  rca_available: boolean
 }

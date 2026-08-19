@@ -15,6 +15,9 @@ import MonitoringOverview from '@/pages/Monitoring/Overview'
 import PromQL from '@/pages/Monitoring/PromQL'
 import LogSearch from '@/pages/Logs/Search'
 import AIAssistant from '@/pages/AI/Assistant'
+import Incidents from '@/pages/AIOps/Incidents'
+import Anomaly from '@/pages/AIOps/Anomaly'
+import Topology from '@/pages/AIOps/Topology'
 
 export const router = createBrowserRouter([
   {
@@ -48,9 +51,10 @@ export const router = createBrowserRouter([
       { path: 'alerts/aggregate', element: <Placeholder title="告警聚合" phase="Phase 5" /> },
       { path: 'alerts/noise', element: <Placeholder title="告警降噪" phase="Phase 5" /> },
       // AIOps
-      { path: 'aiops/anomaly', element: <Placeholder title="异常检测" phase="Phase 7" /> },
+      { path: 'aiops/incidents', element: <Incidents /> },
+      { path: 'aiops/anomaly', element: <Anomaly /> },
       { path: 'aiops/rca', element: <Placeholder title="根因分析" phase="Phase 7" /> },
-      { path: 'aiops/topology', element: <Placeholder title="服务拓扑" phase="Phase 7" /> },
+      { path: 'aiops/topology', element: <Topology /> },
       // Logs
       { path: 'logs/search', element: <LogSearch /> },
       { path: 'logs/analyze', element: <Placeholder title="日志分析" phase="Phase 6" /> },

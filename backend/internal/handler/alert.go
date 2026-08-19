@@ -2,11 +2,13 @@ package handler
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/aiops/aiops-platform/internal/alert"
+	"github.com/aiops/aiops-platform/internal/incident"
 	"github.com/aiops/aiops-platform/pkg/response"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -14,9 +16,10 @@ import (
 
 // AlertHandler 处理告警相关的 HTTP 请求。
 type AlertHandler struct {
-	Repo         *alert.Repository
-	Aggregator   *alert.Aggregator
-	NoiseReducer *alert.NoiseReducer
+	Repo            *alert.Repository
+	Aggregator      *alert.Aggregator
+	NoiseReducer    *alert.NoiseReducer
+	IncidentService *incident.Service // 可选：告警自动关联 Incident
 }
 
 // listResult 是分页查询的返回结构。
@@ -57,9 +60,50 @@ func (h *AlertHandler) ReceiveWebhook(c *gin.Context) {
 		} else {
 			updated++
 		}
+
+		// 关联到 Incident（可选，失败不影响告警保存）。
+		if h.IncidentService != nil {
+			sig := alertToSignal(saved, payload.Status)
+			if _, _, err := h.IncidentService.IngestSignal(c.Request.Context(), sig); err != nil {
+				slog.Warn("alert: incident correlation failed", "fingerprint", saved.Fingerprint, "err", err)
+			}
+		}
 	}
 
 	response.OK(c, gin.H{"received": len(payload.Alerts), "created": created, "updated": updated})
+}
+
+// alertToSignal 将 Alert 转换为统一 Signal 结构。
+func alertToSignal(a *alert.Alert, webhookStatus string) incident.Signal {
+	resolved := webhookStatus == "resolved" || a.Status == alert.StatusResolved
+	resourceType := incident.ResourcePod
+	resourceName := a.Pod
+	if a.Pod == "" && a.Node != "" {
+		resourceType = incident.ResourceNode
+		resourceName = a.Node
+	}
+	if a.Pod == "" && a.Node == "" && a.Service != "" {
+		resourceType = incident.ResourceService
+		resourceName = a.Service
+	}
+	return incident.Signal{
+		SignalType:   incident.SignalAlert,
+		SignalID:     a.Fingerprint,
+		Title:        a.Alertname,
+		Severity:     a.Severity,
+		Cluster:      "local", // 当前单集群，未来从 alert labels 提取
+		Namespace:    a.Namespace,
+		Service:      a.Service,
+		ResourceType: resourceType,
+		ResourceName: resourceName,
+		Timestamp:    a.StartsAt,
+		Resolved:     resolved,
+		Labels:       a.Labels,
+		Metadata: map[string]any{
+			"instance":    a.Instance,
+			"annotations": a.Annotations,
+		},
+	}
 }
 
 // List 处理 GET /api/v1/alerts

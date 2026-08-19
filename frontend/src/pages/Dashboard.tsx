@@ -7,6 +7,7 @@ import {
   AlertOutlined,
   WarningOutlined,
   ThunderboltOutlined,
+  FireOutlined,
   CheckCircleOutlined,
   ReloadOutlined,
   ExclamationCircleOutlined,
@@ -17,6 +18,7 @@ import { clusterApi } from '@/api/cluster'
 import { k8sApi } from '@/api/kubernetes'
 import { alertsApi } from '@/api/alerts'
 import { metricsApi } from '@/api/metrics'
+import { anomalyApi } from '@/api/anomaly'
 import type { Cluster, Node, Pod, Alert as AlertType, PageResult } from '@/types'
 import dayjs from 'dayjs'
 
@@ -28,6 +30,7 @@ export default function Dashboard() {
   const [nodes, setNodes] = useState<Node[]>([])
   const [pods, setPods] = useState<Pod[]>([])
   const [alerts, setAlerts] = useState<PageResult<AlertType> | null>(null)
+  const [activeAnomalyCount, setActiveAnomalyCount] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>('')
   const [timeRange, setTimeRange] = useState('1h')
@@ -44,18 +47,21 @@ export default function Dashboard() {
 
       if (clusterList && clusterList.length > 0) {
         const firstCluster = clusterList[0].name
-        const [nodeList, podList, alertData] = await Promise.all([
+        const [nodeList, podList, alertData, anomalyData] = await Promise.all([
           k8sApi.nodes(firstCluster).catch(() => [] as Node[]),
           k8sApi.pods({ cluster: firstCluster }).catch(() => [] as Pod[]),
           alertsApi.list({ page: 1, page_size: 100, status: 'firing' }).catch(() => ({ items: [], total: 0, page: 1, page_size: 100 } as PageResult<AlertType>)),
+          anomalyApi.activeCount().catch(() => ({ count: 0 })),
         ])
         setNodes(nodeList || [])
         setPods(podList || [])
         setAlerts(alertData)
+        setActiveAnomalyCount(anomalyData?.count || 0)
       } else {
         setNodes([])
         setPods([])
         setAlerts({ items: [], total: 0, page: 1, page_size: 100 })
+        setActiveAnomalyCount(0)
       }
     } catch (err: any) {
       setError(err?.message || '数据加载失败')
@@ -202,6 +208,18 @@ export default function Dashboard() {
                 value={abnormalPods.length}
                 prefix={<ThunderboltOutlined style={{ color: '#eb2f96' }} />}
                 valueStyle={{ color: abnormalPods.length > 0 ? '#eb2f96' : undefined }}
+              />
+            </Spin>
+          </Card>
+        </Col>
+        <Col xs={12} sm={8} md={6} lg={4}>
+          <Card className="stat-card" onClick={() => navigate('/aiops/anomaly')} style={{ cursor: 'pointer' }}>
+            <Spin spinning={loading}>
+              <Statistic
+                title="活跃异常"
+                value={activeAnomalyCount}
+                prefix={<FireOutlined style={{ color: '#fa541c' }} />}
+                valueStyle={{ color: activeAnomalyCount > 0 ? '#fa541c' : undefined }}
               />
             </Spin>
           </Card>
