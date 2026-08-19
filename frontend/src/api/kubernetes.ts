@@ -1,5 +1,5 @@
 import request from './client'
-import type { Node, Pod, Deployment, Service } from '@/types'
+import type { Node, Pod, PodDetail, Deployment, Service, NodeDetail } from '@/types'
 
 export interface Namespace {
   name: string
@@ -10,12 +10,18 @@ export interface Namespace {
 export const k8sApi = {
   nodes: (cluster?: string) =>
     request.get<any, Node[]>('/api/v1/nodes', { params: { cluster } }),
+  nodeDetail: (name: string, cluster?: string) =>
+    request.get<any, NodeDetail>(`/api/v1/nodes/${name}`, { params: { cluster } }),
   namespaces: (cluster?: string) =>
     request.get<any, Namespace[]>('/api/v1/namespaces', { params: { cluster } }),
   pods: (params: { cluster?: string; namespace?: string }) =>
     request.get<any, Pod[]>('/api/v1/pods', { params }),
+  podDetail: (name: string, params: { cluster?: string; namespace?: string }) =>
+    request.get<any, PodDetail>(`/api/v1/pods/${name}`, { params }),
   deployments: (params: { cluster?: string; namespace?: string }) =>
     request.get<any, Deployment[]>('/api/v1/deployments', { params }),
+  deploymentDetail: (name: string, params: { cluster?: string; namespace?: string }) =>
+    request.get<any, Deployment>(`/api/v1/deployments/${name}`, { params }),
   statefulsets: (params: { cluster?: string; namespace?: string }) =>
     request.get<any, any[]>('/api/v1/statefulsets', { params }),
   daemonsets: (params: { cluster?: string; namespace?: string }) =>

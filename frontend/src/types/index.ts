@@ -67,11 +67,43 @@ export interface K8sResource {
 // Node
 export interface Node extends K8sResource {
   status: string
-  cpu_usage?: number
-  memory_usage?: number
-  pod_count?: number
   version?: string
   internal_ip?: string
+  age?: string
+  creation_timestamp?: string
+  os?: string
+  kernel?: string
+  container_runtime?: string
+  pod_count?: number
+  cpu_usage?: number
+  memory_usage?: number
+}
+
+export interface NodeCondition {
+  type: string
+  status: string
+  reason?: string
+  message?: string
+}
+
+export interface NodeTaint {
+  key: string
+  value?: string
+  effect: string
+}
+
+export interface NodeDetail extends Node {
+  conditions?: NodeCondition[]
+  taints?: NodeTaint[]
+}
+
+// Container
+export interface Container {
+  name: string
+  image: string
+  ready: boolean
+  state: string
+  restart_count: number
 }
 
 // Pod
@@ -80,26 +112,29 @@ export interface Pod extends K8sResource {
   node?: string
   status: string
   ip?: string
+  age?: string
+  creation_timestamp?: string
   restart_count?: number
   cpu_usage?: number
   memory_usage?: number
   containers?: Container[]
 }
 
-export interface Container {
-  name: string
-  image: string
-  ready: boolean
-  restart_count: number
+export interface PodDetail extends Pod {
+  yaml?: string
 }
 
 // Deployment
 export interface Deployment extends K8sResource {
   namespace: string
+  ready?: string
   replicas: number
-  ready_replicas: number
-  available_replicas: number
-  updated_replicas: number
+  available?: number
+  updated?: number
+  strategy?: string
+  images?: string[]
+  age?: string
+  creation_timestamp?: string
 }
 
 // Service

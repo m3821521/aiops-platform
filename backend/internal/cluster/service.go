@@ -8,6 +8,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/yaml"
 )
 
 type Service struct {
@@ -172,6 +173,66 @@ func (s *Service) GetPodEvents(ctx context.Context, cluster, namespace, pod stri
 
 	list, err := client.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
 		FieldSelector: "involvedObject.name=" + pod + ",involvedObject.kind=Pod",
+	})
+	if err != nil {
+		return nil, err
+	}
+	return list.Items, nil
+}
+
+// GetPod 获取单个 Pod 详情
+func (s *Service) GetPod(ctx context.Context, cluster, namespace, name string) (*corev1.Pod, error) {
+	client, err := s.mgr.Client(cluster)
+	if err != nil {
+		return nil, err
+	}
+	return client.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
+}
+
+// GetPodYAML 获取 Pod YAML（脱敏后返回）
+func (s *Service) GetPodYAML(ctx context.Context, cluster, namespace, name string) (string, error) {
+	pod, err := s.GetPod(ctx, cluster, namespace, name)
+	if err != nil {
+		return "", err
+	}
+	// 清理敏感字段
+	pod.ManagedFields = nil
+	pod.ResourceVersion = ""
+	pod.UID = ""
+	pod.Generation = 0
+	data, err := yaml.Marshal(pod)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// GetNode 获取单个 Node 详情
+func (s *Service) GetNode(ctx context.Context, cluster, name string) (*corev1.Node, error) {
+	client, err := s.mgr.Client(cluster)
+	if err != nil {
+		return nil, err
+	}
+	return client.CoreV1().Nodes().Get(ctx, name, metav1.GetOptions{})
+}
+
+// GetDeployment 获取单个 Deployment 详情
+func (s *Service) GetDeployment(ctx context.Context, cluster, namespace, name string) (*appsv1.Deployment, error) {
+	client, err := s.mgr.Client(cluster)
+	if err != nil {
+		return nil, err
+	}
+	return client.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+}
+
+// GetNodeEvents 获取 Node 相关事件
+func (s *Service) GetNodeEvents(ctx context.Context, cluster, node string) ([]corev1.Event, error) {
+	client, err := s.mgr.Client(cluster)
+	if err != nil {
+		return nil, err
+	}
+	list, err := client.CoreV1().Events("").List(ctx, metav1.ListOptions{
+		FieldSelector: "involvedObject.name=" + node + ",involvedObject.kind=Node",
 	})
 	if err != nil {
 		return nil, err

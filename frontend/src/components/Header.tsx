@@ -1,4 +1,4 @@
-import { Layout, Dropdown, Avatar, Button, Select, Space, Tooltip } from 'antd'
+import { Layout, Dropdown, Avatar, Button, Select, Space, Tooltip, Badge, Popover, List, Tag } from 'antd'
 import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -7,13 +7,15 @@ import {
   BulbOutlined,
   BulbFilled,
   CloudServerOutlined,
+  BellOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { useEffect, useState } from 'react'
 import { clusterApi } from '@/api/cluster'
-import type { Cluster } from '@/types'
+import { alertsApi } from '@/api/alerts'
+import type { Cluster, Alert } from '@/types'
 
 const { Header } = Layout
 
@@ -23,9 +25,22 @@ export default function AppHeader() {
     useAppStore()
   const { user, logout } = useAuthStore()
   const [clusters, setClusters] = useState<Cluster[]>([])
+  const [firingAlerts, setFiringAlerts] = useState<Alert[]>([])
 
   useEffect(() => {
     clusterApi.list().then(setClusters).catch(() => {})
+  }, [])
+
+  const fetchAlerts = () => {
+    alertsApi.list({ page: 1, page_size: 5, status: 'firing' })
+      .then((res) => setFiringAlerts(res?.items || []))
+      .catch(() => {})
+  }
+
+  useEffect(() => {
+    fetchAlerts()
+    const timer = setInterval(fetchAlerts, 30000)
+    return () => clearInterval(timer)
   }, [])
 
   const userMenu = {
@@ -73,6 +88,40 @@ export default function AppHeader() {
       </Space>
 
       <Space>
+        <Popover
+          content={
+            <div style={{ width: 320 }}>
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>活动告警 ({firingAlerts.length})</div>
+              {firingAlerts.length > 0 ? (
+                <List
+                  size="small"
+                  dataSource={firingAlerts}
+                  renderItem={(item) => (
+                    <List.Item>
+                      <Space>
+                        <Tag color={item.severity === 'critical' ? 'error' : item.severity === 'warning' ? 'warning' : 'info'}>
+                          {item.severity}
+                        </Tag>
+                        <span style={{ fontSize: 13 }}>{item.alertname}</span>
+                      </Space>
+                    </List.Item>
+                  )}
+                />
+              ) : (
+                <div style={{ color: '#999', textAlign: 'center', padding: '16px 0' }}>暂无活动告警</div>
+              )}
+              <div style={{ textAlign: 'center', marginTop: 8 }}>
+                <Button type="link" size="small" onClick={() => navigate('/alerts/realtime')}>查看全部</Button>
+              </div>
+            </div>
+          }
+          title={null}
+          trigger="click"
+        >
+          <Badge count={firingAlerts.length} size="small">
+            <Button type="text" icon={<BellOutlined />} />
+          </Badge>
+        </Popover>
         <Tooltip title={theme === 'dark' ? '切换浅色' : '切换深色'}>
           <Button
             type="text"

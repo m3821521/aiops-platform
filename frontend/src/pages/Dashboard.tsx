@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Row, Col, Card, Statistic, Typography, Space, Tag, Spin, Alert, Table, Badge, Button } from 'antd'
+import { Row, Col, Card, Statistic, Typography, Space, Tag, Spin, Alert, Table, Badge, Button, Select } from 'antd'
 import {
   CloudOutlined,
   NodeIndexOutlined,
@@ -12,10 +12,13 @@ import {
   ExclamationCircleOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
+import ReactECharts from 'echarts-for-react'
 import { clusterApi } from '@/api/cluster'
 import { k8sApi } from '@/api/kubernetes'
 import { alertsApi } from '@/api/alerts'
+import { metricsApi } from '@/api/metrics'
 import type { Cluster, Node, Pod, Alert as AlertType, PageResult } from '@/types'
+import dayjs from 'dayjs'
 
 const { Title, Text } = Typography
 
@@ -27,6 +30,10 @@ export default function Dashboard() {
   const [alerts, setAlerts] = useState<PageResult<AlertType> | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>('')
+  const [timeRange, setTimeRange] = useState('1h')
+  const [cpuSeries, setCpuSeries] = useState<any[]>([])
+  const [memSeries, setMemSeries] = useState<any[]>([])
+  const [metricsError, setMetricsError] = useState('')
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -60,6 +67,39 @@ export default function Dashboard() {
   useEffect(() => {
     fetchData()
   }, [fetchData])
+
+  const fetchMetrics = useCallback(async () => {
+    if (clusters.length === 0) return
+    setMetricsError('')
+    const seconds = timeRange === '1h' ? 3600 : timeRange === '6h' ? 21600 : 86400
+    const end = dayjs()
+    const start = end.subtract(seconds, 'second')
+    const step = Math.max(30, Math.floor(seconds / 120))
+    try {
+      const [cpuRes, memRes] = await Promise.all([
+        metricsApi.range({
+          query: '100 - (avg by(instance)(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)',
+          start: start.toISOString(),
+          end: end.toISOString(),
+          step: `${step}s`,
+        }).catch(() => ({ result: [] })),
+        metricsApi.range({
+          query: '100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))',
+          start: start.toISOString(),
+          end: end.toISOString(),
+          step: `${step}s`,
+        }).catch(() => ({ result: [] })),
+      ])
+      setCpuSeries((cpuRes as any)?.result?.[0]?.values || [])
+      setMemSeries((memRes as any)?.result?.[0]?.values || [])
+    } catch {
+      setMetricsError('Prometheus 监控数据源不可用')
+    }
+  }, [clusters.length, timeRange])
+
+  useEffect(() => {
+    if (clusters.length > 0) fetchMetrics()
+  }, [clusters.length, timeRange, fetchMetrics])
 
   const runningPods = pods.filter((p) => p.status === 'Running').length
   const abnormalPods = pods.filter((p) => p.status !== 'Running' && p.status !== 'Succeeded')
@@ -249,20 +289,80 @@ export default function Dashboard() {
         </Col>
       </Row>
 
-      {/* 趋势图占位 */}
+      {/* 资源趋势图 */}
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
         <Col xs={24} lg={16}>
-          <Card title="资源趋势" style={{ height: 280 }} size="small">
-            <div style={{ color: '#999', textAlign: 'center', paddingTop: 80 }}>
-              CPU / Memory / Network 趋势图表（待实现）
-            </div>
+          <Card
+            title="资源趋势"
+            size="small"
+            extra={
+              <Select
+                value={timeRange}
+                onChange={setTimeRange}
+                size="small"
+                style={{ width: 100 }}
+                options={[
+                  { label: '1 小时', value: '1h' },
+                  { label: '6 小时', value: '6h' },
+                  { label: '24 小时', value: '24h' },
+                ]}
+              />
+            }
+          >
+            {metricsError ? (
+              <Alert message={metricsError} type="warning" showIcon style={{ marginTop: 8 }} />
+            ) : cpuSeries.length > 0 || memSeries.length > 0 ? (
+              <ReactECharts
+                option={{
+                  tooltip: { trigger: 'axis' },
+                  legend: { data: ['CPU 使用率', '内存使用率'], bottom: 0 },
+                  grid: { left: 50, right: 20, top: 20, bottom: 40 },
+                  xAxis: { type: 'time', axisLabel: { fontSize: 11 } },
+                  yAxis: { type: 'value', axisLabel: { formatter: '{value}%', fontSize: 11 }, max: 100 },
+                  series: [
+                    {
+                      name: 'CPU 使用率',
+                      type: 'line',
+                      smooth: true,
+                      showSymbol: false,
+                      data: cpuSeries.map((v: any) => [v[0] * 1000, parseFloat(v[1]).toFixed(2)]),
+                      lineStyle: { color: '#52c41a', width: 2 },
+                      areaStyle: { color: '#52c41a20' },
+                    },
+                    {
+                      name: '内存使用率',
+                      type: 'line',
+                      smooth: true,
+                      showSymbol: false,
+                      data: memSeries.map((v: any) => [v[0] * 1000, parseFloat(v[1]).toFixed(2)]),
+                      lineStyle: { color: '#1677ff', width: 2 },
+                      areaStyle: { color: '#1677ff20' },
+                    },
+                  ],
+                }}
+                style={{ height: 240 }}
+              />
+            ) : (
+              <div style={{ color: '#999', textAlign: 'center', paddingTop: 80 }}>暂无监控数据</div>
+            )}
           </Card>
         </Col>
         <Col xs={24} lg={8}>
-          <Card title="告警分布" style={{ height: 280 }} size="small">
-            <div style={{ color: '#999', textAlign: 'center', paddingTop: 80 }}>
-              告警级别 / 服务分布（待实现）
-            </div>
+          <Card title="告警分布" size="small">
+            <Row gutter={[8, 8]}>
+              <Col span={12}>
+                <Statistic title="Critical" value={criticalAlerts.length} valueStyle={{ color: '#ff4d4f' }} />
+              </Col>
+              <Col span={12}>
+                <Statistic title="Warning" value={warningAlerts.length} valueStyle={{ color: '#faad14' }} />
+              </Col>
+              <Col span={12}>
+                <Statistic title="Info" value={(alerts?.items?.filter((a) => a.severity === 'info') || []).length} />
+              </Col>
+              <Col span={12}>
+                <Statistic title="总计" value={firingCount} />
+              </Col>
+            </Row>
           </Card>
         </Col>
       </Row>

@@ -65,9 +65,12 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 
 		v1.GET("/clusters", deps.Cluster.ListClusters)
 		v1.GET("/nodes", deps.Cluster.ListNodes)
+		v1.GET("/nodes/:name", deps.Cluster.GetNode)
 		v1.GET("/namespaces", deps.Cluster.ListNamespaces)
 		v1.GET("/pods", deps.Cluster.ListPods)
+		v1.GET("/pods/:name", deps.Cluster.GetPod)
 		v1.GET("/deployments", deps.Cluster.ListDeployments)
+		v1.GET("/deployments/:name", deps.Cluster.GetDeployment)
 		v1.GET("/statefulsets", deps.Cluster.ListStatefulSets)
 		v1.GET("/daemonsets", deps.Cluster.ListDaemonSets)
 		v1.GET("/services", deps.Cluster.ListServices)

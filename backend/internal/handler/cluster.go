@@ -1,6 +1,9 @@
 package handler
 
 import (
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+
 	"github.com/aiops/aiops-platform/internal/cluster"
 	"github.com/aiops/aiops-platform/pkg/response"
 	"github.com/gin-gonic/gin"
@@ -101,4 +104,41 @@ func (h *ClusterHandler) ListSecrets(c *gin.Context) {
 		return
 	}
 	response.OK(c, cluster.ToSecretViews(items))
+}
+
+// GetPod 获取 Pod 详情
+func (h *ClusterHandler) GetPod(c *gin.Context) {
+	name := c.Param("name")
+	ns := namespace(c)
+	pod, err := h.Service.GetPod(c.Request.Context(), clusterName(c), ns, name)
+	if err != nil {
+		response.NotFound(c, err.Error())
+		return
+	}
+	view := cluster.ToPodViews([]corev1.Pod{*pod})[0]
+	yaml, _ := h.Service.GetPodYAML(c.Request.Context(), clusterName(c), ns, name)
+	response.OK(c, cluster.PodDetail{PodView: view, YAML: yaml})
+}
+
+// GetNode 获取 Node 详情
+func (h *ClusterHandler) GetNode(c *gin.Context) {
+	name := c.Param("name")
+	node, err := h.Service.GetNode(c.Request.Context(), clusterName(c), name)
+	if err != nil {
+		response.NotFound(c, err.Error())
+		return
+	}
+	response.OK(c, cluster.ToNodeDetail(node))
+}
+
+// GetDeployment 获取 Deployment 详情
+func (h *ClusterHandler) GetDeployment(c *gin.Context) {
+	name := c.Param("name")
+	dep, err := h.Service.GetDeployment(c.Request.Context(), clusterName(c), namespace(c), name)
+	if err != nil {
+		response.NotFound(c, err.Error())
+		return
+	}
+	view := cluster.ToDeploymentViews([]appsv1.Deployment{*dep})[0]
+	response.OK(c, view)
 }

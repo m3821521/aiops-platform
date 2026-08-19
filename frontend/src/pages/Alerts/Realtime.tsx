@@ -50,6 +50,8 @@ export default function AlertList() {
 
   useEffect(() => {
     fetchData()
+    const timer = setInterval(fetchData, 30000)
+    return () => clearInterval(timer)
   }, [fetchData])
 
   const handleViewDetail = async (record: Alert) => {
