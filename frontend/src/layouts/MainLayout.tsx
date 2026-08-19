@@ -82,6 +82,11 @@ export default function MainLayout() {
     document.title = `${title} - AIOps Platform`
   }, [location.pathname])
 
+  // 应用主题到 DOM（CSS Variables [data-theme='dark'] 依赖此属性）
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', themeMode)
+  }, [themeMode])
+
   const breadcrumbItems = breadcrumbMap[location.pathname] || ['首页']
 
   return (

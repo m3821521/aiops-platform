@@ -117,25 +117,25 @@ export default function Dashboard() {
   const healthColor = healthStatus === 'healthy' ? '#16a34a' : healthStatus === 'warning' ? '#d97706' : '#dc2626'
 
   const podColumns = [
-    { title: 'Pod', dataIndex: 'name', key: 'name', render: (t: string) => <Text strong style={{ fontSize: 13 }}>{t}</Text> },
-    { title: 'Namespace', dataIndex: 'namespace', key: 'namespace', render: (v: string) => v || '-' },
-    { title: 'Status', dataIndex: 'status', key: 'status', render: (s: string) => (
-      <span className={`status-badge ${s === 'Running' ? 'success' : s === 'Failed' ? 'danger' : 'warning'}`}>{s || 'Unknown'}</span>
+    { title: '容器', dataIndex: 'name', key: 'name', render: (t: string) => <Text strong style={{ fontSize: 13 }}>{t}</Text> },
+    { title: '命名空间', dataIndex: 'namespace', key: 'namespace', render: (v: string) => v || '-' },
+    { title: '状态', dataIndex: 'status', key: 'status', render: (s: string) => (
+      <span className={`status-badge ${s === 'Running' ? 'success' : s === 'Failed' ? 'danger' : 'warning'}`}>{s || '未知'}</span>
     )},
-    { title: 'Restarts', dataIndex: 'restartCount', key: 'restartCount', render: (v: number) => v || 0 },
+    { title: '重启次数', dataIndex: 'restart_count', key: 'restart_count', render: (v: number) => v || 0 },
   ]
 
   const alertColumns = [
-    { title: 'Alert', dataIndex: 'alertname', key: 'alertname', render: (t: string) => <Text strong style={{ fontSize: 13 }}>{t}</Text> },
-    { title: 'Severity', dataIndex: 'severity', key: 'severity', render: (s: string) => (
+    { title: '告警名称', dataIndex: 'alertname', key: 'alertname', render: (t: string) => <Text strong style={{ fontSize: 13 }}>{t}</Text> },
+    { title: '级别', dataIndex: 'severity', key: 'severity', render: (s: string) => (
       <span className={`status-badge ${s === 'critical' ? 'critical' : s === 'warning' ? 'warning' : 'info'}`}>{s}</span>
     )},
-    { title: 'Service', dataIndex: 'service', key: 'service', render: (v: string) => v || '-' },
+    { title: '服务', dataIndex: 'service', key: 'service', render: (v: string) => v || '-' },
   ]
 
   const chartOption = {
     tooltip: { trigger: 'axis', backgroundColor: '#fff', borderColor: '#e5e7eb', textStyle: { color: '#111827', fontSize: 12 } },
-    legend: { data: ['CPU', 'Memory'], bottom: 0, textStyle: { fontSize: 12, color: '#6b7280' }, itemWidth: 12, itemHeight: 8 },
+    legend: { data: ['CPU', '内存'], bottom: 0, textStyle: { fontSize: 12, color: '#6b7280' }, itemWidth: 12, itemHeight: 8 },
     grid: { left: 45, right: 16, top: 16, bottom: 36 },
     xAxis: { type: 'time', axisLabel: { fontSize: 11, color: '#9ca3af' }, axisLine: { lineStyle: { color: '#e5e7eb' } } },
     yAxis: { type: 'value', axisLabel: { formatter: '{value}%', fontSize: 11, color: '#9ca3af' }, max: 100, splitLine: { lineStyle: { color: '#f3f4f6' } } },
@@ -166,9 +166,9 @@ export default function Dashboard() {
       {/* Page Header */}
       <div className="aiops-page-header">
         <div>
-          <div className="aiops-page-title">Operations Overview</div>
+          <div className="aiops-page-title">运维总览</div>
           <div className="aiops-page-subtitle">
-            {dayjs().format('YYYY-MM-DD HH:mm')} · {clusters.length} cluster{clusters.length !== 1 ? 's' : ''} · {nodes.length} node{nodes.length !== 1 ? 's' : ''}
+            {dayjs().format('YYYY-MM-DD HH:mm')} · {clusters.length} 集群 · {nodes.length} 节点
           </div>
         </div>
         <Space>
@@ -178,12 +178,12 @@ export default function Dashboard() {
             size="middle"
             style={{ width: 110 }}
             options={[
-              { label: 'Last 1h', value: '1h' },
-              { label: 'Last 6h', value: '6h' },
-              { label: 'Last 24h', value: '24h' },
+              { label: '最近 1 小时', value: '1h' },
+              { label: '最近 6 小时', value: '6h' },
+              { label: '最近 24 小时', value: '24h' },
             ]}
           />
-          <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>Refresh</Button>
+          <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>刷新</Button>
         </Space>
       </div>
 
@@ -192,11 +192,11 @@ export default function Dashboard() {
         <Col xs={12} sm={12} md={6}>
           <div className={`kpi-card accent-${healthStatus}`} onClick={() => navigate('/kubernetes/nodes')} style={{ cursor: 'pointer' }}>
             <HeartOutlined className="kpi-icon" style={{ color: healthColor }} />
-            <div className="kpi-label"><HeartOutlined style={{ fontSize: 11 }} /> System Health</div>
+            <div className="kpi-label"><HeartOutlined style={{ fontSize: 11 }} /> 系统健康度</div>
             <div>
               <div className="kpi-value" style={{ color: healthColor, fontSize: 28 }}>{systemHealth.toFixed(1)}%</div>
               <div className="kpi-sub" style={{ color: healthColor }}>
-                {healthStatus === 'healthy' ? 'All systems operational' : healthStatus === 'warning' ? 'Minor issues detected' : 'Critical issues require attention'}
+                {healthStatus === 'healthy' ? '所有系统运行正常' : healthStatus === 'warning' ? '检测到轻微问题' : '存在严重问题需关注'}
               </div>
             </div>
           </div>
@@ -204,14 +204,14 @@ export default function Dashboard() {
         <Col xs={12} sm={12} md={6}>
           <div className={`kpi-card ${firingCount > 0 ? 'accent-warning' : ''}`} onClick={() => navigate('/aiops/incidents')} style={{ cursor: 'pointer' }}>
             <AlertOutlined className="kpi-icon" style={{ color: '#d97706' }} />
-            <div className="kpi-label"><AlertOutlined style={{ fontSize: 11 }} /> Active Alerts</div>
+            <div className="kpi-label"><AlertOutlined style={{ fontSize: 11 }} /> 活动告警</div>
             <div>
               <div className="kpi-value" style={{ fontSize: 28 }}>{firingCount}</div>
               <div className="kpi-sub">
-                {criticalAlerts.length > 0 && <span style={{ color: '#dc2626', fontWeight: 600 }}>{criticalAlerts.length} Critical</span>}
+                {criticalAlerts.length > 0 && <span style={{ color: '#dc2626', fontWeight: 600 }}>{criticalAlerts.length} 严重</span>}
                 {criticalAlerts.length > 0 && warningAlerts.length > 0 && ' · '}
-                {warningAlerts.length > 0 && <span style={{ color: '#d97706' }}>{warningAlerts.length} Warning</span>}
-                {firingCount === 0 && <span style={{ color: '#16a34a' }}>No active alerts</span>}
+                {warningAlerts.length > 0 && <span style={{ color: '#d97706' }}>{warningAlerts.length} 警告</span>}
+                {firingCount === 0 && <span style={{ color: '#16a34a' }}>暂无活动告警</span>}
               </div>
             </div>
           </div>
@@ -219,13 +219,13 @@ export default function Dashboard() {
         <Col xs={12} sm={12} md={6}>
           <div className="kpi-card" onClick={() => navigate('/kubernetes/pods')} style={{ cursor: 'pointer' }}>
             <AppstoreOutlined className="kpi-icon" style={{ color: '#7c3aed' }} />
-            <div className="kpi-label"><AppstoreOutlined style={{ fontSize: 11 }} /> Infrastructure</div>
+            <div className="kpi-label"><AppstoreOutlined style={{ fontSize: 11 }} /> 基础设施</div>
             <div>
-              <div className="kpi-value" style={{ fontSize: 28 }}>{pods.length} <span style={{ fontSize: 16, color: '#9ca3af', fontWeight: 400 }}>Pods</span></div>
+              <div className="kpi-value" style={{ fontSize: 28 }}>{pods.length} <span style={{ fontSize: 16, color: '#9ca3af', fontWeight: 400 }}>容器</span></div>
               <div className="kpi-sub">
-                <span style={{ color: '#16a34a' }}>{runningPods} Running</span>
-                {failedPods > 0 && <span style={{ color: '#dc2626' }}> · {failedPods} Failed</span>}
-                {abnormalPods.length > 0 && <span style={{ color: '#d97706' }}> · {abnormalPods.length} Abnormal</span>}
+                <span style={{ color: '#16a34a' }}>{runningPods} 运行中</span>
+                {failedPods > 0 && <span style={{ color: '#dc2626' }}> · {failedPods} 失败</span>}
+                {abnormalPods.length > 0 && <span style={{ color: '#d97706' }}> · {abnormalPods.length} 异常</span>}
               </div>
             </div>
           </div>
@@ -233,10 +233,10 @@ export default function Dashboard() {
         <Col xs={12} sm={12} md={6}>
           <div className="kpi-card" onClick={() => navigate('/aiops/anomaly')} style={{ cursor: 'pointer' }}>
             <FireOutlined className="kpi-icon" style={{ color: '#ea580c' }} />
-            <div className="kpi-label"><FireOutlined style={{ fontSize: 11 }} /> Anomalies</div>
+            <div className="kpi-label"><FireOutlined style={{ fontSize: 11 }} /> 异常检测</div>
             <div>
               <div className="kpi-value" style={{ fontSize: 28, color: activeAnomalyCount > 0 ? '#ea580c' : undefined }}>{activeAnomalyCount}</div>
-              <div className="kpi-sub">{activeAnomalyCount > 0 ? 'Active anomalies detected' : 'No anomalies detected'}</div>
+              <div className="kpi-sub">{activeAnomalyCount > 0 ? '检测到活动异常' : '暂无异常'}</div>
             </div>
           </div>
         </Col>
@@ -247,8 +247,8 @@ export default function Dashboard() {
         <Col xs={24} lg={16}>
           <div className="aiops-card">
             <div className="aiops-card-header">
-              <div className="aiops-card-title">Resource Trend</div>
-              <Text type="secondary" style={{ fontSize: 12 }}>Cluster-wide CPU & Memory</Text>
+              <div className="aiops-card-title">资源趋势</div>
+              <Text type="secondary" style={{ fontSize: 12 }}>集群 CPU 与内存使用率</Text>
             </div>
             <div className="aiops-card-body" style={{ paddingTop: 8 }}>
               {metricsError ? (
@@ -258,7 +258,7 @@ export default function Dashboard() {
               ) : cpuSeries.length > 0 || memSeries.length > 0 ? (
                 <ReactECharts option={chartOption} style={{ height: 220 }} notMerge />
               ) : (
-                <Empty description="No monitoring data" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: '32px 0' }} />
+                <Empty description="暂无监控数据" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: '32px 0' }} />
               )}
             </div>
           </div>
@@ -266,29 +266,29 @@ export default function Dashboard() {
         <Col xs={24} lg={8}>
           <div className="aiops-card" style={{ height: '100%' }}>
             <div className="aiops-card-header">
-              <div className="aiops-card-title">Alert Summary</div>
-              <Button type="link" size="small" onClick={() => navigate('/alerts/realtime')}>View all</Button>
+              <div className="aiops-card-title">告警概览</div>
+              <Button type="link" size="small" onClick={() => navigate('/alerts/realtime')}>查看全部</Button>
             </div>
             <div className="aiops-card-body">
               <Row gutter={[8, 16]}>
                 <Col span={12}>
                   <div style={{ textAlign: 'center' }}>
                     <div style={{ fontSize: 28, fontWeight: 700, color: '#dc2626' }}>{criticalAlerts.length}</div>
-                    <div style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 0.5 }}>Critical</div>
+                    <div style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 0.5 }}>严重</div>
                   </div>
                 </Col>
                 <Col span={12}>
                   <div style={{ textAlign: 'center' }}>
                     <div style={{ fontSize: 28, fontWeight: 700, color: '#d97706' }}>{warningAlerts.length}</div>
-                    <div style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 0.5 }}>Warning</div>
+                    <div style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 0.5 }}>警告</div>
                   </div>
                 </Col>
               </Row>
               <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid #f3f4f6' }}>
-                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>Cluster Health</div>
+                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>集群健康度</div>
                 <Progress percent={Math.round(systemHealth)} strokeColor={healthColor} showInfo={false} size="small" />
                 <div style={{ fontSize: 12, color: healthColor, marginTop: 4, fontWeight: 500 }}>
-                  {systemHealth.toFixed(1)}% — {healthStatus === 'healthy' ? 'Healthy' : healthStatus === 'warning' ? 'Degraded' : 'Critical'}
+                  {systemHealth.toFixed(1)}% — {healthStatus === 'healthy' ? '健康' : healthStatus === 'warning' ? '降级' : '严重'}
                 </div>
               </div>
             </div>
@@ -301,8 +301,8 @@ export default function Dashboard() {
         <Col xs={24} lg={14}>
           <div className="aiops-card">
             <div className="aiops-card-header">
-              <div className="aiops-card-title">Active Alerts</div>
-              <Button type="link" size="small" onClick={() => navigate('/alerts/realtime')}>View all →</Button>
+              <div className="aiops-card-title">活动告警</div>
+              <Button type="link" size="small" onClick={() => navigate('/alerts/realtime')}>查看全部 →</Button>
             </div>
             <div className="aiops-card-body" style={{ padding: 0 }}>
               <Spin spinning={loading}>
@@ -316,7 +316,7 @@ export default function Dashboard() {
                     showHeader={true}
                   />
                 ) : (
-                  <Empty description="No active alerts" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: '32px 0' }} />
+                  <Empty description="暂无活动告警" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: '32px 0' }} />
                 )}
               </Spin>
             </div>
@@ -325,8 +325,8 @@ export default function Dashboard() {
         <Col xs={24} lg={10}>
           <div className="aiops-card">
             <div className="aiops-card-header">
-              <div className="aiops-card-title">Infrastructure Status</div>
-              <Button type="link" size="small" onClick={() => navigate('/kubernetes/pods')}>Pods →</Button>
+              <div className="aiops-card-title">基础设施状态</div>
+              <Button type="link" size="small" onClick={() => navigate('/kubernetes/pods')}>容器 →</Button>
             </div>
             <div className="aiops-card-body" style={{ padding: 0 }}>
               <Spin spinning={loading}>
@@ -341,8 +341,8 @@ export default function Dashboard() {
                 ) : (
                   <div style={{ textAlign: 'center', padding: '32px 0' }}>
                     <CheckCircleOutlined style={{ fontSize: 28, color: '#16a34a', marginBottom: 8 }} />
-                    <div style={{ fontSize: 13, color: '#6b7280' }}>All pods healthy</div>
-                    <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>{runningPods}/{pods.length} pods running</div>
+                    <div style={{ fontSize: 13, color: '#6b7280' }}>所有容器运行正常</div>
+                    <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>{runningPods}/{pods.length} 容器运行中</div>
                   </div>
                 )}
               </Spin>

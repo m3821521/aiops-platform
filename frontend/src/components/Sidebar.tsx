@@ -17,68 +17,68 @@ import { useAppStore } from '@/stores/app'
 const { Sider } = Layout
 
 const menuItems = [
-  { key: '/', icon: <DashboardOutlined />, label: 'Overview' },
+  { key: '/', icon: <DashboardOutlined />, label: '总览' },
   {
     key: '/kubernetes',
     icon: <CloudOutlined />,
-    label: 'Infrastructure',
+    label: '基础设施',
     children: [
-      { key: '/kubernetes/clusters', label: 'Clusters' },
-      { key: '/kubernetes/nodes', label: 'Nodes' },
-      { key: '/kubernetes/namespaces', label: 'Namespaces' },
-      { key: '/kubernetes/pods', label: 'Pods' },
-      { key: '/kubernetes/deployments', label: 'Deployments' },
-      { key: '/kubernetes/services', label: 'Services' },
+      { key: '/kubernetes/clusters', label: '集群' },
+      { key: '/kubernetes/nodes', label: '节点' },
+      { key: '/kubernetes/namespaces', label: '命名空间' },
+      { key: '/kubernetes/pods', label: '容器组' },
+      { key: '/kubernetes/deployments', label: '部署' },
+      { key: '/kubernetes/services', label: '服务' },
     ],
   },
   {
     key: '/monitoring',
     icon: <MonitorOutlined />,
-    label: 'Observability',
+    label: '可观测性',
     children: [
-      { key: '/monitoring/overview', label: 'Metrics' },
-      { key: '/monitoring/promql', label: 'PromQL' },
+      { key: '/monitoring/host', label: '指标监控' },
+      { key: '/monitoring/promql', label: 'PromQL 查询' },
     ],
   },
   {
     key: '/alerts',
     icon: <AlertOutlined />,
-    label: 'Alerts',
+    label: '告警中心',
     children: [
-      { key: '/alerts/realtime', label: 'Active Alerts' },
-      { key: '/alerts/history', label: 'History' },
+      { key: '/alerts/realtime', label: '实时告警' },
+      { key: '/alerts/history', label: '告警历史' },
     ],
   },
   {
     key: '/aiops',
     icon: <ThunderboltOutlined />,
-    label: 'AIOps',
+    label: '智能运维',
     children: [
-      { key: '/aiops/incidents', label: 'Incidents' },
-      { key: '/aiops/anomaly', label: 'Anomaly Detection' },
-      { key: '/aiops/topology', label: 'Service Topology' },
+      { key: '/aiops/incidents', label: '事件中心' },
+      { key: '/aiops/anomaly', label: '异常检测' },
+      { key: '/aiops/topology', label: '服务拓扑' },
     ],
   },
   {
     key: '/logs',
     icon: <FileTextOutlined />,
-    label: 'Logs',
+    label: '日志中心',
     children: [
-      { key: '/logs/search', label: 'Log Search' },
+      { key: '/logs/search', label: '日志检索' },
     ],
   },
   {
     key: '/ai',
     icon: <RobotOutlined />,
-    label: 'AI Assistant',
+    label: 'AI 助手',
   },
   {
     key: '/automation',
     icon: <ToolOutlined />,
-    label: 'Automation',
+    label: '自动化',
     children: [
-      { key: '/automation/actions', label: 'Actions' },
-      { key: '/automation/workflows', label: 'Workflows' },
+      { key: '/automation/actions', label: '操作审批' },
+      { key: '/automation/workflows', label: '工作流' },
       { key: '/automation/jenkins', label: 'Jenkins' },
       { key: '/automation/argocd', label: 'ArgoCD' },
     ],
@@ -86,10 +86,10 @@ const menuItems = [
   {
     key: '/system',
     icon: <SettingOutlined />,
-    label: 'Administration',
+    label: '系统管理',
     children: [
-      { key: '/system/users', label: 'Users' },
-      { key: '/system/audit', label: 'Audit Logs' },
+      { key: '/system/users', label: '用户管理' },
+      { key: '/system/audit', label: '审计日志' },
     ],
   },
 ]
