@@ -10,7 +10,7 @@ services:
       - "3306:3306"
     volumes:
       - mysql-data:/var/lib/mysql
-      - ./migrations:/docker-entrypoint-initdb.d:ro
+      - ./backend/migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uaiops", "-paiops123"]
       interval: 5s
@@ -115,8 +115,10 @@ services:
     networks:
       - aiops-net
 
-  aiops:
-    build: .
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     depends_on:
       mysql:
         condition: service_healthy
@@ -131,10 +133,27 @@ services:
     environment:
       CONFIG_PATH: /app/configs/config.yaml
     volumes:
-      - ./configs/config.docker.yaml:/app/configs/config.yaml:ro
-      - ./configs/clusters.example.yaml:/app/configs/clusters.yaml:ro
+      - ./backend/configs/config.docker.yaml:/app/configs/config.yaml:ro
+      - ./backend/configs/clusters.example.yaml:/app/configs/clusters.yaml:ro
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aiops-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost/"]
       interval: 10s
       timeout: 5s
       retries: 5

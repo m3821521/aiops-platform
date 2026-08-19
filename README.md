@@ -1,152 +1,331 @@
 # AIOps Platform
 
-企业级智能运维平台后端（Go）。当前完成：
+企业级智能运维平台，基于 Go + React 构建，支持 Kubernetes 监控、Prometheus 指标、告警管理、异常检测、根因分析（RCA）、ELK 日志分析、AI 运维助手、自动化运维、Jenkins/ArgoCD 集成等完整运维闭环。
 
-- 第一阶段：可运行的基础骨架（配置、日志、HTTP、MySQL、Redis、健康检查、Swagger、Docker、K8s 清单）
-- 第二阶段：Kubernetes 多集群只读查询（Node / Namespace / Pod / Deployment / StatefulSet / DaemonSet / Service / ConfigMap / Secret 元数据）
+## 系统架构
 
-本 README 按「Java 开发者学 Go」来写：每个目录干什么、怎么跑、怎么验证。
+```
+                    Internet
+                        │
+                        ▼
+                    Ingress / Nginx
+                    /          \
+                   /            \
+                  ▼              ▼
+             Frontend         Backend (Go/Gin)
+             (React/TS)            │
+                                   ├── Kubernetes (client-go)
+                                   ├── Prometheus
+                                   ├── Alertmanager
+                                   ├── Elasticsearch (ELK)
+                                   ├── MySQL (GORM)
+                                   ├── Redis
+                                   ├── Jenkins
+                                   └── ArgoCD
+```
 
-## 为什么目录是这样
+**运维闭环：**
 
-推荐的 `aiops-platform/` 结构大体保留。做了 3 处调整：
+```
+发现问题 → 查看告警 → 查看指标 → 查看日志 → 查看 K8s
+    → 服务拓扑 → RCA 分析 → AI 辅助 → 人工确认 → 自动化处理 → 审计
+```
 
-1. **入口在 `cmd/server/main.go`，而不是项目根目录 `main.go`**  
-   这是 Go 官方推荐布局。以后如果加 `cmd/worker`（告警消费进程），不会和 API 进程挤在一起。
+## 技术栈
 
-2. **`internal/` 里暂时没有写满 ai / rca / anomaly 代码**  
-   那些目录只放了 README 占位。原因：你要求「第一步先能跑」，空实现会让人误以为已经有 AI 能力。
+### 后端
+- **语言**: Go 1.25+
+- **框架**: Gin
+- **ORM**: GORM
+- **缓存**: go-redis
+- **监控**: Prometheus client_golang
+- **K8s**: client-go
+- **认证**: JWT + RBAC + bcrypt
+- **日志**: slog
+- **API 文档**: Swagger/OpenAPI
 
-3. **新增 `internal/infra` 和 `internal/cluster`**  
-   MySQL/Redis 连接属于基础设施，Kubernetes 客户端属于集群模块。比全部塞进 `handler` 更接近 Spring 的 `config` + `service` 分层。
+### 前端
+- **框架**: React 18 + TypeScript
+- **构建**: Vite 5
+- **UI**: Ant Design 5
+- **路由**: React Router 6
+- **状态**: Zustand
+- **HTTP**: Axios
+- **图表**: ECharts
+- **时间**: Day.js
 
-对应关系（方便你对照 Spring Boot）：
+### 基础设施
+- **数据库**: MySQL 8.0
+- **缓存**: Redis 7
+- **监控**: Prometheus + Grafana + Alertmanager
+- **日志**: Elasticsearch + Kibana
+- **容器**: Docker + Docker Compose
+- **编排**: Kubernetes + Helm
+- **CI/CD**: Jenkins + ArgoCD
 
-| Spring Boot | 本项目 |
-|-------------|--------|
-| `application.yml` | `configs/config.yaml` |
-| `@Configuration` | `internal/config` |
-| `DataSource` / RedisTemplate | `internal/infra` |
-| `Controller` | `internal/handler` |
-| `Service` | `internal/cluster` |
-| `Filter` | `internal/middleware` |
-| 统一返回体 | `pkg/response` |
+## 目录结构
 
-## 本地运行（逐步验证）
+```
+aiops-platform/
+├── backend/                    # Go 后端
+│   ├── cmd/server/             # 入口
+│   ├── internal/               # 业务代码
+│   │   ├── api/                # 路由
+│   │   ├── handler/            # HTTP Handler
+│   │   ├── service/            # 业务逻辑
+│   │   ├── repository/         # 数据访问
+│   │   ├── model/              # 数据模型
+│   │   ├── middleware/         # 中间件
+│   │   ├── config/             # 配置
+│   │   ├── cluster/            # K8s 集群管理
+│   │   ├── monitoring/         # Prometheus
+│   │   ├── alert/              # 告警系统
+│   │   ├── anomaly/            # 异常检测
+│   │   ├── rca/                # 根因分析
+│   │   ├── logging/            # ELK 日志
+│   │   ├── ai/                 # AI 助手
+│   │   ├── automation/         # 自动化运维
+│   │   ├── auth/               # 认证授权
+│   │   ├── audit/              # 审计日志
+│   │   └── redisutil/          # Redis 工具
+│   ├── pkg/                    # 公共包
+│   ├── migrations/             # 数据库迁移
+│   ├── configs/                # 配置文件
+│   ├── docs/                   # Swagger 文档
+│   ├── tests/                  # 测试
+│   ├── scripts/                # 脚本
+│   ├── go.mod
+│   ├── Dockerfile
+│   └── Makefile
+│
+├── frontend/                   # React 前端
+│   ├── src/
+│   │   ├── api/                # API 层
+│   │   ├── components/         # 通用组件
+│   │   ├── layouts/            # 布局
+│   │   ├── pages/              # 页面
+│   │   ├── router/             # 路由
+│   │   ├── stores/             # Zustand 状态
+│   │   ├── types/              # TypeScript 类型
+│   │   ├── utils/              # 工具函数
+│   │   ├── hooks/              # 自定义 Hooks
+│   │   └── styles/             # 全局样式
+│   ├── public/
+│   ├── Dockerfile
+│   ├── nginx.conf
+│   ├── package.json
+│   └── vite.config.ts
+│
+├── deployments/                # 部署配置
+│   ├── docker/                 # Docker 配置
+│   ├── kubernetes/             # K8s Manifest
+│   ├── helm/aiops/             # Helm Chart
+│   └── argocd/                 # ArgoCD Application
+│
+├── docs/                       # 项目文档
+├── scripts/                    # 根目录脚本
+├── .env.example                # 环境变量模板
+├── .gitignore
+├── Makefile                    # 统一构建入口
+├── docker-compose.yaml         # 本地开发环境
+├── Jenkinsfile                 # CI/CD Pipeline
+└── README.md
+```
 
-### 0. 准备
+## 环境要求
 
-- Go 1.24+
+- Go 1.25+
+- Node.js 20+
+- Docker & Docker Compose
 - MySQL 8.0
-- Redis
-- （第二阶段）本机 `kubectl` 能连上的集群，kubeconfig 一般在 `~/.kube/config`
+- Redis 7
+- (可选) Kubernetes 集群
+- (可选) Prometheus / Grafana / ELK
 
-Windows PowerShell：
+## 快速开始
 
-```powershell
-cd C:\Users\Administrator\Desktop\aiops-platform
-copy configs\config.example.yaml configs\config.yaml
-copy configs\clusters.example.yaml configs\clusters.yaml
+### 方式一：Docker Compose（推荐）
+
+```bash
+# 克隆项目
+git clone <repository>
+cd aiops-platform
+
+# 复制环境变量
+cp .env.example .env
+
+# 启动全部服务
+docker compose up -d
+
+# 查看状态
+docker compose ps
 ```
 
-修改 `configs/config.yaml` 里的 MySQL 密码。这两个文件已在 `.gitignore`，不要提交。
+访问：
+- 前端: http://localhost
+- 后端 API: http://localhost:8080
+- 健康检查: http://localhost:8080/health
+- Prometheus: http://localhost:9090
+- Grafana: http://localhost:3000 (admin/admin123)
+- Kibana: http://localhost:5601
 
-创建数据库：
+### 方式二：本地开发
 
-```sql
-CREATE DATABASE IF NOT EXISTS aiops DEFAULT CHARACTER SET utf8mb4;
-CREATE USER IF NOT EXISTS 'aiops'@'%' IDENTIFIED BY 'aiops123';
-GRANT ALL ON aiops.* TO 'aiops'@'%';
+```bash
+# 1. 启动依赖服务（MySQL + Redis）
+docker compose up -d mysql redis
+
+# 2. 执行数据库迁移
+cd backend
+mysql -h 127.0.0.1 -u aiops -paiops123 aiops < migrations/001_init.sql
+mysql -h 127.0.0.1 -u aiops -paiops123 aiops < migrations/002_alerts.sql
+mysql -h 127.0.0.1 -u aiops -paiops123 aiops < migrations/003_auth.sql
+mysql -h 127.0.0.1 -u aiops -paiops123 aiops < migrations/004_audit_logs.sql
+cd ..
+
+# 3. 启动后端
+make dev-backend
+# 或: cd backend && go run ./cmd/server
+
+# 4. 启动前端（新终端）
+make dev-frontend
+# 或: cd frontend && npm install && npm run dev
 ```
 
-### 1. 拉依赖并跑测试
+访问：
+- 前端: http://localhost:5173
+- 后端: http://localhost:8080
 
-```powershell
-go mod tidy
-go fmt ./...
-go vet ./...
-go test ./...
+默认账号: `admin / admin123`
+
+## Makefile 命令
+
+```bash
+make dev              # 同时启动前后端
+make dev-backend      # 仅启动后端
+make dev-frontend     # 仅启动前端
+
+make test             # 运行全部测试
+make test-backend     # 后端测试
+make test-frontend    # 前端测试
+
+make lint             # 代码检查
+make lint-backend     # go fmt + go vet
+make lint-frontend    # npm run lint
+
+make build            # 构建前后端
+make build-backend    # go build
+make build-frontend   # npm run build
+
+make docker-build     # 构建 Docker 镜像
+make docker-up        # 启动 docker compose
+make docker-down      # 停止 docker compose
+
+make clean            # 清理构建产物
 ```
 
-测试不连真实 MySQL / 真实集群，用的是 Kubernetes `fake` 客户端。
+## API 文档
 
-### 2. 启动 API
+后端启动后访问 Swagger UI:
+- http://localhost:8080/swagger/index.html
 
-```powershell
-go run ./cmd/server
+主要 API 模块：
+
+| 模块 | 前缀 | 说明 |
+|------|------|------|
+| 健康检查 | `/health`, `/ready`, `/metrics` | 存活/就绪/指标 |
+| Kubernetes | `/api/v1/clusters`, `/nodes`, `/pods`, ... | K8s 资源查询 |
+| 指标 | `/api/v1/metrics/query`, `/range`, `/nodes`, `/pods` | Prometheus 查询 |
+| 告警 | `/api/v1/alerts`, `/aggregate`, `/noise` | 告警管理 |
+| 异常检测 | `/api/v1/anomaly/detect` | 异常检测 |
+| RCA | `/api/v1/rca/analyze` | 根因分析 |
+| 日志 | `/api/v1/logs/search`, `/analyze` | ELK 日志 |
+| AI | `/api/v1/ai/ask` | AI 助手 |
+| 自动化 | `/api/v1/automation/pods/...`, `/deployments/...` | 运维操作 |
+| Jenkins | `/api/v1/jenkins/jobs`, `/builds`, `/build` | CI/CD |
+| ArgoCD | `/api/v1/argocd/apps`, `/sync`, `/refresh` | GitOps |
+| 认证 | `/api/v1/auth/login`, `/me`, `/logout` | JWT 认证 |
+| 用户 | `/api/v1/users`, `/roles` | 用户角色管理 |
+| 审计 | `/api/v1/audit-logs` | 审计日志 |
+
+## 开发规范
+
+### 后端
+- 代码格式: `go fmt ./...`
+- 静态检查: `go vet ./...`
+- 测试: `go test ./...`
+- 错误处理: 所有 error 必须处理
+- Context: 所有外部调用使用 context.Context
+- 配置: 通过 configs/config.yaml 管理，不硬编码
+
+### 前端
+- 代码检查: `npm run lint`
+- 构建: `npm run build`
+- API 调用: 统一通过 src/api/ 层，禁止在组件中直接写 axios
+- 状态管理: 全局状态用 Zustand，页面数据局部管理
+- 类型: 所有 API 响应定义 TypeScript 类型
+
+## 安全说明
+
+- 所有密码、Token、API Key 通过环境变量注入，不提交到 Git
+- JWT Secret 生产环境必须修改
+- 数据库密码生产环境必须修改
+- Kubernetes kubeconfig / Token 不提交到 Git
+- 所有写操作（重启 Pod、扩容、Jenkins 构建、ArgoCD Sync）需要人工确认
+- AI 助手默认不执行危险操作
+- API 限流基于 Redis，防止滥用
+- 审计日志记录所有重要操作
+
+## 部署
+
+### Kubernetes (Helm)
+
+```bash
+cd deployments/helm/aiops
+helm install aiops . -n aiops --create-namespace
 ```
 
-看到 `aiops-platform started` 后：
+### ArgoCD
 
-```powershell
-curl http://127.0.0.1:8080/health
-curl http://127.0.0.1:8080/ready
+```bash
+kubectl apply -f deployments/argocd/application.yaml
 ```
 
-- `/health`：进程活着（类似 liveness）
-- `/ready`：MySQL、Redis 都能 ping（类似 readiness）
+## 测试
 
-Swagger UI：浏览器打开 `http://127.0.0.1:8080/swagger/index.html`
+### 后端测试
 
-### 3. 验证 Kubernetes 查询
-
-```powershell
-curl http://127.0.0.1:8080/api/v1/clusters
-curl "http://127.0.0.1:8080/api/v1/nodes?cluster=local"
-curl "http://127.0.0.1:8080/api/v1/pods?cluster=local&namespace=default"
-curl "http://127.0.0.1:8080/api/v1/deployments?cluster=local&namespace=default"
-curl "http://127.0.0.1:8080/api/v1/services?cluster=local&namespace=default"
+```bash
+cd backend
+go test ./... -v -cover
 ```
 
-`cluster` 不传时，使用配置里第一个 `enabled: true` 的集群。  
-`namespace` 不传时，查询所有命名空间。
+测试覆盖：
+- 告警聚合/降噪
+- 异常检测算法（静态阈值/MA/EWMA/Z-Score）
+- RCA 规则引擎
+- 日志分析器
+- AI 助手
+- 自动化引擎
+- 认证/JWT
+- 审计日志
+- Redis 分布式锁/限流
 
-Secret 接口只返回名称、类型、key 数量，**不会返回明文**。
+### 前端测试
 
-## 多集群怎么配（不要写死 kubeconfig）
-
-编辑 `configs/clusters.yaml`（已 gitignore）：
-
-```yaml
-clusters:
-  - name: local
-    enabled: true
-    auth_type: kubeconfig
-    kubeconfig_path: "~/.kube/config"
-
-  - name: prod
-    enabled: true
-    auth_type: serviceaccount
-    api_server: https://your-apiserver:6443
-    token_file: secrets/prod/token
-    ca_file: secrets/prod/ca.crt
+```bash
+cd frontend
+npm run lint
+npm run build
 ```
 
-三种认证：
+## Git 工作规范
 
-| auth_type | 什么时候用 |
-|-----------|------------|
-| `kubeconfig` | 开发机，指向 kubeconfig **文件路径** |
-| `serviceaccount` | 远程集群，Token / CA 都用 **文件**，不要把内容贴进 YAML 仓库 |
-| `incluster` | 本程序跑在 Kubernetes 里，用 Pod 自带的 ServiceAccount |
+- Commit Message 格式: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`
+- 不直接 push 到 main，通过 PR 合并
+- 每个功能独立分支
+- 合并前确保测试通过
 
-密钥禁止进 Git：`.gitignore` 已忽略 `configs/config.yaml`、`configs/clusters.yaml`、`secrets/`、`*.kubeconfig`。
+## License
 
-## Docker / Kubernetes
-
-```powershell
-docker compose up -d --build
-kubectl apply -f deployments/kubernetes/aiops.yaml
-```
-
-集群内 Deployment 默认 `auth_type: incluster`，并绑定只读 ClusterRole。
-
-## 下一步（还没做，避免一次堆太多）
-
-1. JWT + RBAC + 审计日志  
-2. Prometheus / Grafana 指标接入  
-3. Alertmanager 告警聚合  
-4. ELK 日志查询  
-5. 异常检测 / RCA / AI 助手  
-
-你确认第一、二阶段能在本机跑通后，我们再做其中一块。
+MIT
