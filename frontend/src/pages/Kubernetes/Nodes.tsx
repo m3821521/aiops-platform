@@ -51,7 +51,7 @@ export default function Nodes() {
   const columns = [
     { title: 'Node', dataIndex: 'name', key: 'name', render: (t: string) => <span style={{ fontWeight: 500 }}>{t}</span> },
     { title: '状态', dataIndex: 'status', key: 'status', render: (s: string) => <Tag color={statusColor(s)}>{s}</Tag> },
-    { title: 'K8s 版本', dataIndex: 'kubernetes_version', key: 'version', render: (v: string) => v || '-' },
+    { title: 'K8s 版本', dataIndex: 'version', key: 'version', render: (v: string) => v || '-' },
     { title: '内部 IP', dataIndex: 'internal_ip', key: 'ip', render: (v: string) => v || '-' },
     { title: 'Pod 数量', dataIndex: 'pod_count', key: 'pods', render: (v: number) => v ?? '-' },
     { title: 'CPU 使用率', dataIndex: 'cpu_usage', key: 'cpu', render: (v: number) => v != null ? `${v}%` : '-' },

@@ -1,13 +1,20 @@
 import { useEffect, useState } from 'react'
-import { Table, Tag, Card, Button, Spin, Select, Space, Progress } from 'antd'
+import { Table, Tag, Card, Button, Spin, Select, Space } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { k8sApi } from '@/api/kubernetes'
 import type { Namespace } from '@/api/kubernetes'
 import { clusterApi } from '@/api/cluster'
-import type { Deployment, Cluster } from '@/types'
+import type { Cluster } from '@/types'
+
+// 后端实际返回的 Deployment 结构
+interface DeploymentItem {
+  name: string
+  namespace: string
+  ready: string // 如 "1/1"
+}
 
 export default function Deployments() {
-  const [data, setData] = useState<Deployment[]>([])
+  const [data, setData] = useState<DeploymentItem[]>([])
   const [clusters, setClusters] = useState<Cluster[]>([])
   const [namespaces, setNamespaces] = useState<Namespace[]>([])
   const [cluster, setCluster] = useState<string>('')
@@ -38,7 +45,7 @@ export default function Deployments() {
     setLoading(true)
     try {
       const res = await k8sApi.deployments({ cluster, namespace: namespace || undefined })
-      setData(res || [])
+      setData((res as unknown as DeploymentItem[]) || [])
     } finally {
       setLoading(false)
     }
@@ -52,27 +59,18 @@ export default function Deployments() {
     }
   }, [cluster])
 
+  const readyColor = (ready: string) => {
+    if (!ready) return 'default'
+    const [r, t] = ready.split('/').map(Number)
+    if (r === t) return 'success'
+    if (r === 0) return 'error'
+    return 'warning'
+  }
+
   const columns = [
     { title: 'Deployment', dataIndex: 'name', key: 'name', render: (t: string) => <span style={{ fontWeight: 500 }}>{t}</span> },
     { title: 'Namespace', dataIndex: 'namespace', key: 'namespace', render: (t: string) => <Tag>{t}</Tag> },
-    {
-      title: '副本',
-      key: 'replicas',
-      render: (_: any, r: Deployment) => {
-        const total = r.replicas || 0
-        const ready = r.ready_replicas || 0
-        const pct = total > 0 ? Math.round((ready / total) * 100) : 0
-        return (
-          <Space>
-            <span>{ready}/{total}</span>
-            <Progress percent={pct} size="small" style={{ width: 80 }} status={pct === 100 ? 'success' : 'active'} />
-          </Space>
-        )
-      },
-    },
-    { title: '可用', dataIndex: 'available_replicas', key: 'available', render: (v: number) => v ?? 0 },
-    { title: '已更新', dataIndex: 'updated_replicas', key: 'updated', render: (v: number) => v ?? 0 },
-    { title: 'Age', dataIndex: 'age', key: 'age', render: (v: string) => v || '-' },
+    { title: '副本', dataIndex: 'ready', key: 'ready', render: (v: string) => <Tag color={readyColor(v)}>{v || '-'}</Tag> },
   ]
 
   return (
