@@ -20,7 +20,7 @@ data:
       host: mysql
       port: 3306
       user: aiops
-      password: CHANGE_ME
+      password: aiops123
       database: aiops
       charset: utf8mb4
       max_idle: 10
