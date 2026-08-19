@@ -4,6 +4,12 @@ import Login from '@/pages/Login'
 import Dashboard from '@/pages/Dashboard'
 import Placeholder from '@/pages/Placeholder'
 import RequireAuth from './RequireAuth'
+import Clusters from '@/pages/Kubernetes/Clusters'
+import Nodes from '@/pages/Kubernetes/Nodes'
+import Namespaces from '@/pages/Kubernetes/Namespaces'
+import Pods from '@/pages/Kubernetes/Pods'
+import Deployments from '@/pages/Kubernetes/Deployments'
+import Services from '@/pages/Kubernetes/Services'
 
 export const router = createBrowserRouter([
   {
@@ -20,12 +26,12 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Dashboard /> },
       // Kubernetes
-      { path: 'kubernetes/clusters', element: <Placeholder title="集群管理" phase="Phase 3" /> },
-      { path: 'kubernetes/nodes', element: <Placeholder title="Node 管理" phase="Phase 3" /> },
-      { path: 'kubernetes/namespaces', element: <Placeholder title="Namespace" phase="Phase 3" /> },
-      { path: 'kubernetes/pods', element: <Placeholder title="Pod 管理" phase="Phase 3" /> },
-      { path: 'kubernetes/deployments', element: <Placeholder title="Deployment" phase="Phase 3" /> },
-      { path: 'kubernetes/services', element: <Placeholder title="Service" phase="Phase 3" /> },
+      { path: 'kubernetes/clusters', element: <Clusters /> },
+      { path: 'kubernetes/nodes', element: <Nodes /> },
+      { path: 'kubernetes/namespaces', element: <Namespaces /> },
+      { path: 'kubernetes/pods', element: <Pods /> },
+      { path: 'kubernetes/deployments', element: <Deployments /> },
+      { path: 'kubernetes/services', element: <Services /> },
       // Monitoring
       { path: 'monitoring/host', element: <Placeholder title="主机监控" phase="Phase 4" /> },
       { path: 'monitoring/k8s', element: <Placeholder title="Kubernetes 监控" phase="Phase 4" /> },

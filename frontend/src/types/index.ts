@@ -45,7 +45,10 @@ export interface Permission {
 // 集群
 export interface Cluster {
   name: string
-  endpoint: string
+  description?: string
+  auth_type: 'kubeconfig' | 'serviceaccount' | 'incluster'
+  enabled: boolean
+  api_server?: string
   version?: string
   status?: string
   node_count?: number

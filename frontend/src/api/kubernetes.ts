@@ -1,11 +1,17 @@
 import request from './client'
 import type { Node, Pod, Deployment, Service } from '@/types'
 
+export interface Namespace {
+  name: string
+  status: string
+  age?: string
+}
+
 export const k8sApi = {
   nodes: (cluster?: string) =>
     request.get<any, Node[]>('/api/v1/nodes', { params: { cluster } }),
   namespaces: (cluster?: string) =>
-    request.get<any, string[]>('/api/v1/namespaces', { params: { cluster } }),
+    request.get<any, Namespace[]>('/api/v1/namespaces', { params: { cluster } }),
   pods: (params: { cluster?: string; namespace?: string }) =>
     request.get<any, Pod[]>('/api/v1/pods', { params }),
   deployments: (params: { cluster?: string; namespace?: string }) =>
