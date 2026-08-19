@@ -11,6 +11,10 @@ import Pods from '@/pages/Kubernetes/Pods'
 import Deployments from '@/pages/Kubernetes/Deployments'
 import Services from '@/pages/Kubernetes/Services'
 import AlertRealtime from '@/pages/Alerts/Realtime'
+import MonitoringOverview from '@/pages/Monitoring/Overview'
+import PromQL from '@/pages/Monitoring/PromQL'
+import LogSearch from '@/pages/Logs/Search'
+import AIAssistant from '@/pages/AI/Assistant'
 
 export const router = createBrowserRouter([
   {
@@ -34,10 +38,10 @@ export const router = createBrowserRouter([
       { path: 'kubernetes/deployments', element: <Deployments /> },
       { path: 'kubernetes/services', element: <Services /> },
       // Monitoring
-      { path: 'monitoring/host', element: <Placeholder title="主机监控" phase="Phase 4" /> },
-      { path: 'monitoring/k8s', element: <Placeholder title="Kubernetes 监控" phase="Phase 4" /> },
+      { path: 'monitoring/host', element: <MonitoringOverview /> },
+      { path: 'monitoring/k8s', element: <MonitoringOverview /> },
       { path: 'monitoring/pod', element: <Placeholder title="Pod 监控" phase="Phase 4" /> },
-      { path: 'monitoring/promql', element: <Placeholder title="PromQL 查询" phase="Phase 4" /> },
+      { path: 'monitoring/promql', element: <PromQL /> },
       // Alerts
       { path: 'alerts/realtime', element: <AlertRealtime /> },
       { path: 'alerts/history', element: <Placeholder title="告警历史" phase="Phase 5" /> },
@@ -48,10 +52,10 @@ export const router = createBrowserRouter([
       { path: 'aiops/rca', element: <Placeholder title="根因分析" phase="Phase 7" /> },
       { path: 'aiops/topology', element: <Placeholder title="服务拓扑" phase="Phase 7" /> },
       // Logs
-      { path: 'logs/search', element: <Placeholder title="日志搜索" phase="Phase 6" /> },
+      { path: 'logs/search', element: <LogSearch /> },
       { path: 'logs/analyze', element: <Placeholder title="日志分析" phase="Phase 6" /> },
       // AI
-      { path: 'ai', element: <Placeholder title="AI 运维助手" phase="Phase 8" /> },
+      { path: 'ai', element: <AIAssistant /> },
       // Automation
       { path: 'automation/k8s', element: <Placeholder title="Kubernetes 运维" phase="Phase 9" /> },
       { path: 'automation/jenkins', element: <Placeholder title="Jenkins" phase="Phase 10" /> },
