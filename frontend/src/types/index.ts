@@ -7,7 +7,7 @@ export interface ApiResponse<T = any> {
 
 // 分页响应
 export interface PageResult<T> {
-  list: T[]
+  items: T[]
   total: number
   page: number
   page_size: number

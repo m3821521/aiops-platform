@@ -10,6 +10,7 @@ import Namespaces from '@/pages/Kubernetes/Namespaces'
 import Pods from '@/pages/Kubernetes/Pods'
 import Deployments from '@/pages/Kubernetes/Deployments'
 import Services from '@/pages/Kubernetes/Services'
+import AlertRealtime from '@/pages/Alerts/Realtime'
 
 export const router = createBrowserRouter([
   {
@@ -38,7 +39,7 @@ export const router = createBrowserRouter([
       { path: 'monitoring/pod', element: <Placeholder title="Pod 监控" phase="Phase 4" /> },
       { path: 'monitoring/promql', element: <Placeholder title="PromQL 查询" phase="Phase 4" /> },
       // Alerts
-      { path: 'alerts/realtime', element: <Placeholder title="实时告警" phase="Phase 5" /> },
+      { path: 'alerts/realtime', element: <AlertRealtime /> },
       { path: 'alerts/history', element: <Placeholder title="告警历史" phase="Phase 5" /> },
       { path: 'alerts/aggregate', element: <Placeholder title="告警聚合" phase="Phase 5" /> },
       { path: 'alerts/noise', element: <Placeholder title="告警降噪" phase="Phase 5" /> },

@@ -102,8 +102,9 @@ export default function Sidebar() {
   const navigate = useNavigate()
   const location = useLocation()
   const collapsed = useAppStore((s) => s.collapsed)
+  const theme = useAppStore((s) => s.theme)
+  const isDark = theme === 'dark'
 
-  // 计算当前选中的 key（取父级路径）
   const selectedKey = location.pathname
   const openKey = '/' + location.pathname.split('/')[1]
 
@@ -113,12 +114,14 @@ export default function Sidebar() {
       collapsible
       collapsed={collapsed}
       width={220}
+      theme={isDark ? 'dark' : 'light'}
       style={{
         overflow: 'auto',
         height: '100vh',
         position: 'sticky',
         top: 0,
         left: 0,
+        borderRight: isDark ? 'none' : '1px solid rgba(0,0,0,0.06)',
       }}
     >
       <div
@@ -127,16 +130,16 @@ export default function Sidebar() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          color: '#fff',
+          color: isDark ? '#fff' : '#001529',
           fontSize: collapsed ? 14 : 18,
           fontWeight: 600,
-          borderBottom: '1px solid rgba(255,255,255,0.1)',
+          borderBottom: isDark ? '1px solid rgba(255,255,255,0.1)' : '1px solid rgba(0,0,0,0.06)',
         }}
       >
         {collapsed ? 'AIO' : 'AIOps 平台'}
       </div>
       <Menu
-        theme="dark"
+        theme={isDark ? 'dark' : 'light'}
         mode="inline"
         selectedKeys={[selectedKey]}
         defaultOpenKeys={[openKey]}
