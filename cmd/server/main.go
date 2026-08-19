@@ -13,6 +13,7 @@ import (
 	"github.com/aiops/aiops-platform/internal/alert"
 	"github.com/aiops/aiops-platform/internal/anomaly"
 	"github.com/aiops/aiops-platform/internal/api"
+	"github.com/aiops/aiops-platform/internal/audit"
 	"github.com/aiops/aiops-platform/internal/auth"
 	"github.com/aiops/aiops-platform/internal/automation"
 	"github.com/aiops/aiops-platform/internal/cluster"
@@ -22,6 +23,7 @@ import (
 	"github.com/aiops/aiops-platform/internal/logging"
 	"github.com/aiops/aiops-platform/internal/monitoring"
 	"github.com/aiops/aiops-platform/internal/rca"
+	"github.com/aiops/aiops-platform/internal/redisutil"
 	"github.com/aiops/aiops-platform/pkg/logger"
 )
 
@@ -91,6 +93,8 @@ func main() {
 	// 认证服务。
 	userRepo := auth.NewRepository(db)
 	authService := auth.NewService(userRepo, cfg.Auth.JWTSecret, time.Duration(cfg.Auth.JWTExpiration)*time.Hour)
+	auditRepo := audit.NewRepository(db)
+	rateLimiter := redisutil.NewRateLimiter(rdb, 100, time.Minute)
 
 	router := api.NewRouter(cfg.Server.Mode, api.Deps{
 		Health:     &handler.HealthHandler{DB: db, Redis: rdb},
@@ -105,6 +109,8 @@ func main() {
 		Jenkins:    &handler.JenkinsHandler{Jenkins: jenkinsClient},
 		ArgoCD:     &handler.ArgoCDHandler{ArgoCD: argocdClient},
 		Auth:       &handler.AuthHandler{AuthService: authService, UserRepo: userRepo},
+		Audit:      &handler.AuditHandler{Repo: auditRepo},
+		RateLimit:  rateLimiter,
 	})
 
 	addr := cfg.Server.Addr()

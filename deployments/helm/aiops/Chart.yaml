@@ -1,0 +1,14 @@
+apiVersion: v2
+name: aiops
+description: AIOps 企业级智能运维平台
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - aiops
+  - monitoring
+  - kubernetes
+  - prometheus
+  - elk
+maintainers:
+  - name: AIOps Team

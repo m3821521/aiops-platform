@@ -2,22 +2,30 @@
   "swagger": "2.0",
   "info": {
     "title": "AIOps Platform API",
-    "description": "企业级智能运维平台第一/二阶段接口：健康检查 + Kubernetes 资源查询。",
-    "version": "0.1.0"
+    "description": "企业级智能运维平台 API 文档。覆盖 Kubernetes 监控、Prometheus 指标、告警管理、异常检测、RCA 根因分析、ELK 日志、AI 助手、自动化运维、Jenkins、ArgoCD、认证授权、审计日志等全部功能。",
+    "version": "1.0.0"
   },
   "basePath": "/",
   "schemes": ["http"],
+  "securityDefinitions": {
+    "BearerAuth": {
+      "type": "apiKey",
+      "name": "Authorization",
+      "in": "header",
+      "description": "JWT Token，格式: Bearer {token}"
+    }
+  },
   "paths": {
     "/health": {
       "get": {
-        "tags": ["health"],
+        "tags": ["基础"],
         "summary": "存活检查",
         "responses": { "200": { "description": "进程正常" } }
       }
     },
     "/ready": {
       "get": {
-        "tags": ["health"],
+        "tags": ["基础"],
         "summary": "就绪检查（MySQL / Redis）",
         "responses": {
           "200": { "description": "依赖正常" },
@@ -25,27 +33,34 @@
         }
       }
     },
+    "/metrics": {
+      "get": {
+        "tags": ["基础"],
+        "summary": "Prometheus 指标（HTTP 请求、Go runtime 等）",
+        "responses": { "200": { "description": "Prometheus 文本格式指标" } }
+      }
+    },
     "/api/v1/clusters": {
       "get": {
-        "tags": ["kubernetes"],
-        "summary": "列出已启用的 Kubernetes 集群",
+        "tags": ["Kubernetes"],
+        "summary": "列出已配置的 Kubernetes 集群",
         "responses": { "200": { "description": "OK" } }
       }
     },
     "/api/v1/nodes": {
       "get": {
-        "tags": ["kubernetes"],
-        "summary": "查询 Node",
+        "tags": ["Kubernetes"],
+        "summary": "查询 Node 列表",
         "parameters": [
-          { "name": "cluster", "in": "query", "type": "string", "description": "集群名，省略则用第一个启用集群" }
+          { "name": "cluster", "in": "query", "type": "string", "description": "集群名" }
         ],
         "responses": { "200": { "description": "OK" } }
       }
     },
     "/api/v1/namespaces": {
       "get": {
-        "tags": ["kubernetes"],
-        "summary": "查询 Namespace",
+        "tags": ["Kubernetes"],
+        "summary": "查询 Namespace 列表",
         "parameters": [
           { "name": "cluster", "in": "query", "type": "string" }
         ],
@@ -54,19 +69,19 @@
     },
     "/api/v1/pods": {
       "get": {
-        "tags": ["kubernetes"],
-        "summary": "查询 Pod",
+        "tags": ["Kubernetes"],
+        "summary": "查询 Pod 列表",
         "parameters": [
           { "name": "cluster", "in": "query", "type": "string" },
-          { "name": "namespace", "in": "query", "type": "string", "description": "省略则查询全部命名空间" }
+          { "name": "namespace", "in": "query", "type": "string" }
         ],
         "responses": { "200": { "description": "OK" } }
       }
     },
     "/api/v1/deployments": {
       "get": {
-        "tags": ["kubernetes"],
-        "summary": "查询 Deployment",
+        "tags": ["Kubernetes"],
+        "summary": "查询 Deployment 列表",
         "parameters": [
           { "name": "cluster", "in": "query", "type": "string" },
           { "name": "namespace", "in": "query", "type": "string" }
@@ -76,8 +91,8 @@
     },
     "/api/v1/statefulsets": {
       "get": {
-        "tags": ["kubernetes"],
-        "summary": "查询 StatefulSet",
+        "tags": ["Kubernetes"],
+        "summary": "查询 StatefulSet 列表",
         "parameters": [
           { "name": "cluster", "in": "query", "type": "string" },
           { "name": "namespace", "in": "query", "type": "string" }
@@ -87,8 +102,8 @@
     },
     "/api/v1/daemonsets": {
       "get": {
-        "tags": ["kubernetes"],
-        "summary": "查询 DaemonSet",
+        "tags": ["Kubernetes"],
+        "summary": "查询 DaemonSet 列表",
         "parameters": [
           { "name": "cluster", "in": "query", "type": "string" },
           { "name": "namespace", "in": "query", "type": "string" }
@@ -98,8 +113,8 @@
     },
     "/api/v1/services": {
       "get": {
-        "tags": ["kubernetes"],
-        "summary": "查询 Service",
+        "tags": ["Kubernetes"],
+        "summary": "查询 Service 列表",
         "parameters": [
           { "name": "cluster", "in": "query", "type": "string" },
           { "name": "namespace", "in": "query", "type": "string" }
@@ -109,8 +124,8 @@
     },
     "/api/v1/configmaps": {
       "get": {
-        "tags": ["kubernetes"],
-        "summary": "查询 ConfigMap（只返回名称和 key 数量）",
+        "tags": ["Kubernetes"],
+        "summary": "查询 ConfigMap 列表",
         "parameters": [
           { "name": "cluster", "in": "query", "type": "string" },
           { "name": "namespace", "in": "query", "type": "string" }
@@ -120,11 +135,380 @@
     },
     "/api/v1/secrets": {
       "get": {
-        "tags": ["kubernetes"],
-        "summary": "查询 Secret 元数据（绝不返回明文）",
+        "tags": ["Kubernetes"],
+        "summary": "查询 Secret 元数据（不返回明文）",
         "parameters": [
           { "name": "cluster", "in": "query", "type": "string" },
           { "name": "namespace", "in": "query", "type": "string" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/metrics/query": {
+      "get": {
+        "tags": ["指标"],
+        "summary": "Prometheus 即时查询",
+        "parameters": [
+          { "name": "query", "in": "query", "type": "string", "required": true, "description": "PromQL 表达式" },
+          { "name": "time", "in": "query", "type": "string", "description": "RFC3339 时间，默认当前" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/metrics/range": {
+      "get": {
+        "tags": ["指标"],
+        "summary": "Prometheus 范围查询",
+        "parameters": [
+          { "name": "query", "in": "query", "type": "string", "required": true },
+          { "name": "start", "in": "query", "type": "string", "description": "RFC3339" },
+          { "name": "end", "in": "query", "type": "string", "description": "RFC3339" },
+          { "name": "step", "in": "query", "type": "string", "description": "如 15s, 1m" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/metrics/nodes": {
+      "get": {
+        "tags": ["指标"],
+        "summary": "节点 CPU/内存快捷指标",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/metrics/pods": {
+      "get": {
+        "tags": ["指标"],
+        "summary": "Pod CPU/内存快捷指标",
+        "parameters": [
+          { "name": "namespace", "in": "query", "type": "string" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/alerts/webhook": {
+      "post": {
+        "tags": ["告警"],
+        "summary": "Alertmanager Webhook 接收告警",
+        "parameters": [
+          { "name": "body", "in": "body", "required": true, "schema": { "type": "object" }, "description": "Alertmanager webhook payload" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/alerts": {
+      "get": {
+        "tags": ["告警"],
+        "summary": "查询告警列表（分页）",
+        "parameters": [
+          { "name": "page", "in": "query", "type": "integer" },
+          { "name": "page_size", "in": "query", "type": "integer" },
+          { "name": "status", "in": "query", "type": "string", "description": "firing/resolved" },
+          { "name": "severity", "in": "query", "type": "string" },
+          { "name": "service", "in": "query", "type": "string" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/alerts/aggregate": {
+      "get": {
+        "tags": ["告警"],
+        "summary": "告警聚合（按服务/节点/命名空间分组）",
+        "parameters": [
+          { "name": "dimension", "in": "query", "type": "string", "description": "service/node/namespace" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/alerts/noise": {
+      "get": {
+        "tags": ["告警"],
+        "summary": "告警降噪与风暴检测",
+        "parameters": [
+          { "name": "window", "in": "query", "type": "string", "description": "时间窗口，如 5m" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/alerts/{id}": {
+      "get": {
+        "tags": ["告警"],
+        "summary": "查询单条告警详情",
+        "parameters": [
+          { "name": "id", "in": "path", "type": "integer", "required": true }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/alerts/{id}/acknowledge": {
+      "post": {
+        "tags": ["告警"],
+        "summary": "确认告警",
+        "parameters": [
+          { "name": "id", "in": "path", "type": "integer", "required": true }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/alerts/{id}/resolve": {
+      "post": {
+        "tags": ["告警"],
+        "summary": "关闭告警",
+        "parameters": [
+          { "name": "id", "in": "path", "type": "integer", "required": true }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/anomaly/detect": {
+      "post": {
+        "tags": ["异常检测"],
+        "summary": "异常检测（静态阈值/MA/EWMA/Z-Score）",
+        "parameters": [
+          { "name": "body", "in": "body", "required": true, "schema": { "type": "object" }, "description": "{query, start, end, step, thresholds}" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/rca/analyze": {
+      "get": {
+        "tags": ["根因分析"],
+        "summary": "RCA 根因分析",
+        "parameters": [
+          { "name": "start", "in": "query", "type": "string", "description": "RFC3339" },
+          { "name": "end", "in": "query", "type": "string", "description": "RFC3339" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/logs/search": {
+      "get": {
+        "tags": ["日志"],
+        "summary": "Elasticsearch 日志查询",
+        "parameters": [
+          { "name": "keyword", "in": "query", "type": "string" },
+          { "name": "namespace", "in": "query", "type": "string" },
+          { "name": "pod", "in": "query", "type": "string" },
+          { "name": "container", "in": "query", "type": "string" },
+          { "name": "level", "in": "query", "type": "string" },
+          { "name": "trace_id", "in": "query", "type": "string" },
+          { "name": "start", "in": "query", "type": "string" },
+          { "name": "end", "in": "query", "type": "string" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/logs/analyze": {
+      "get": {
+        "tags": ["日志"],
+        "summary": "日志智能分析（Error 聚合/高频/新异常）",
+        "parameters": [
+          { "name": "namespace", "in": "query", "type": "string" },
+          { "name": "pod", "in": "query", "type": "string" },
+          { "name": "level", "in": "query", "type": "string" },
+          { "name": "start", "in": "query", "type": "string" },
+          { "name": "end", "in": "query", "type": "string" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/ai/ask": {
+      "post": {
+        "tags": ["AI 助手"],
+        "summary": "AI 运维助手提问",
+        "parameters": [
+          { "name": "body", "in": "body", "required": true, "schema": { "type": "object" }, "description": "{question, service, duration}" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/automation/pods/{pod}/logs": {
+      "get": {
+        "tags": ["自动化运维"],
+        "summary": "获取 Pod 日志",
+        "parameters": [
+          { "name": "pod", "in": "path", "type": "string", "required": true },
+          { "name": "cluster", "in": "query", "type": "string" },
+          { "name": "namespace", "in": "query", "type": "string" },
+          { "name": "container", "in": "query", "type": "string" },
+          { "name": "tail", "in": "query", "type": "integer" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/automation/pods/{pod}/events": {
+      "get": {
+        "tags": ["自动化运维"],
+        "summary": "获取 Pod Event",
+        "parameters": [
+          { "name": "pod", "in": "path", "type": "string", "required": true },
+          { "name": "cluster", "in": "query", "type": "string" },
+          { "name": "namespace", "in": "query", "type": "string" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/automation/pods/{pod}/restart": {
+      "post": {
+        "tags": ["自动化运维"],
+        "summary": "重启 Pod（需 confirm=true）",
+        "parameters": [
+          { "name": "pod", "in": "path", "type": "string", "required": true },
+          { "name": "body", "in": "body", "required": true, "schema": { "type": "object" }, "description": "{cluster, namespace, confirm}" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/automation/deployments/{name}/scale": {
+      "post": {
+        "tags": ["自动化运维"],
+        "summary": "扩容/缩容 Deployment（需 confirm=true）",
+        "parameters": [
+          { "name": "name", "in": "path", "type": "string", "required": true },
+          { "name": "body", "in": "body", "required": true, "schema": { "type": "object" }, "description": "{cluster, namespace, replicas, confirm}" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/jenkins/jobs": {
+      "get": {
+        "tags": ["Jenkins"],
+        "summary": "列出 Jenkins Job",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/jenkins/jobs/{name}/builds": {
+      "get": {
+        "tags": ["Jenkins"],
+        "summary": "Job 构建历史",
+        "parameters": [
+          { "name": "name", "in": "path", "type": "string", "required": true }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/jenkins/jobs/{name}/build": {
+      "post": {
+        "tags": ["Jenkins"],
+        "summary": "触发构建",
+        "parameters": [
+          { "name": "name", "in": "path", "type": "string", "required": true }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/jenkins/jobs/{name}/builds/{number}/log": {
+      "get": {
+        "tags": ["Jenkins"],
+        "summary": "构建日志",
+        "parameters": [
+          { "name": "name", "in": "path", "type": "string", "required": true },
+          { "name": "number", "in": "path", "type": "integer", "required": true }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/argocd/apps": {
+      "get": {
+        "tags": ["ArgoCD"],
+        "summary": "列出 ArgoCD Application",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/argocd/apps/{name}": {
+      "get": {
+        "tags": ["ArgoCD"],
+        "summary": "Application 详情",
+        "parameters": [
+          { "name": "name", "in": "path", "type": "string", "required": true }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/argocd/apps/{name}/sync": {
+      "post": {
+        "tags": ["ArgoCD"],
+        "summary": "Sync Application",
+        "parameters": [
+          { "name": "name", "in": "path", "type": "string", "required": true }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/argocd/apps/{name}/refresh": {
+      "post": {
+        "tags": ["ArgoCD"],
+        "summary": "Refresh Application",
+        "parameters": [
+          { "name": "name", "in": "path", "type": "string", "required": true },
+          { "name": "hard", "in": "query", "type": "boolean" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": ["认证"],
+        "summary": "登录获取 JWT Token",
+        "parameters": [
+          { "name": "body", "in": "body", "required": true, "schema": { "type": "object" }, "description": "{username, password}" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": ["认证"],
+        "summary": "登出（前端删除 Token）",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "tags": ["认证"],
+        "summary": "获取当前用户信息",
+        "security": [{ "BearerAuth": [] }],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/users": {
+      "get": {
+        "tags": ["用户管理"],
+        "summary": "用户列表",
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          { "name": "page", "in": "query", "type": "integer" },
+          { "name": "page_size", "in": "query", "type": "integer" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      },
+      "post": {
+        "tags": ["用户管理"],
+        "summary": "创建用户",
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          { "name": "body", "in": "body", "required": true, "schema": { "type": "object" }, "description": "{username, password, email, full_name}" }
+        ],
+        "responses": { "201": { "description": "Created" } }
+      }
+    },
+    "/api/v1/roles": {
+      "get": {
+        "tags": ["用户管理"],
+        "summary": "角色列表（含权限）",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/v1/audit-logs": {
+      "get": {
+        "tags": ["审计"],
+        "summary": "审计日志查询",
+        "parameters": [
+          { "name": "page", "in": "query", "type": "integer" },
+          { "name": "page_size", "in": "query", "type": "integer" },
+          { "name": "username", "in": "query", "type": "string" },
+          { "name": "action", "in": "query", "type": "string" },
+          { "name": "resource", "in": "query", "type": "string" },
+          { "name": "result", "in": "query", "type": "string" }
         ],
         "responses": { "200": { "description": "OK" } }
       }

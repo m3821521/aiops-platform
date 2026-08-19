@@ -44,9 +44,26 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 
 // Me 处理 GET /api/v1/auth/me
 func (h *AuthHandler) Me(c *gin.Context) {
+	// 优先从 context 取（如果经过了 AuthMiddleware）
 	user := auth.CurrentUser(c)
-	if user == nil {
+	if user != nil {
+		response.OK(c, user)
+		return
+	}
+	// 否则自己从 Authorization header 解析 token
+	if h.AuthService == nil {
+		response.Unauthorized(c, "认证服务未初始化")
+		return
+	}
+	authHeader := c.GetHeader("Authorization")
+	if authHeader == "" || len(authHeader) < 8 || authHeader[:7] != "Bearer " {
 		response.Unauthorized(c, "未认证")
+		return
+	}
+	token := authHeader[7:]
+	user, err := h.AuthService.ValidateToken(c.Request.Context(), token)
+	if err != nil {
+		response.Unauthorized(c, "Token 无效或已过期")
 		return
 	}
 	response.OK(c, user)

@@ -1,0 +1,68 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aiops.fullname" . }}-config
+  labels:
+    {{- include "aiops.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    server:
+      host: 0.0.0.0
+      port: "8080"
+      mode: release
+
+    log:
+      level: info
+
+    mysql:
+      host: {{ .Values.mysql.host }}
+      port: {{ .Values.mysql.port }}
+      user: {{ .Values.mysql.user }}
+      password: {{ .Values.mysql.password }}
+      database: {{ .Values.mysql.database }}
+      charset: utf8mb4
+      max_idle: 10
+      max_open: 100
+
+    redis:
+      address: "{{ .Values.redis.host }}:{{ .Values.redis.port }}"
+      password: {{ .Values.redis.password }}
+      db: {{ .Values.redis.db }}
+
+    cluster:
+      config_path: /app/configs/clusters.yaml
+
+    prometheus:
+      address: {{ .Values.prometheus.address }}
+      timeout: {{ .Values.prometheus.timeout }}
+
+    elasticsearch:
+      address: {{ .Values.elasticsearch.address }}
+      index: {{ .Values.elasticsearch.index }}
+      username: {{ .Values.elasticsearch.username }}
+      password: {{ .Values.elasticsearch.password }}
+      timeout: {{ .Values.elasticsearch.timeout }}
+
+    jenkins:
+      url: {{ .Values.jenkins.url }}
+      username: {{ .Values.jenkins.username }}
+      token: {{ .Values.jenkins.token }}
+      timeout: 30
+
+    argocd:
+      url: {{ .Values.argocd.url }}
+      token: {{ .Values.argocd.token }}
+      timeout: 30
+
+    ai:
+      enabled: {{ .Values.ai.enabled }}
+      provider: {{ .Values.ai.provider }}
+      base_url: {{ .Values.ai.baseUrl }}
+      api_key: {{ .Values.ai.apiKey }}
+      model: {{ .Values.ai.model }}
+      timeout: 60
+
+    auth:
+      enabled: {{ .Values.auth.enabled }}
+      jwt_secret: {{ .Values.auth.jwtSecret }}
+      jwt_expiration: {{ .Values.auth.jwtExpiration }}

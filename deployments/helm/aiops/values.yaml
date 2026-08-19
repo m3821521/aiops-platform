@@ -1,0 +1,89 @@
+# AIOps Helm Chart Values
+
+replicaCount: 2
+
+image:
+  repository: aiops/aiops-server
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: nginx
+  hosts:
+    - host: aiops.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+
+# 外部服务配置
+mysql:
+  host: mysql
+  port: 3306
+  database: aiops
+  user: aiops
+  password: aiops123
+
+redis:
+  host: redis
+  port: 6379
+  password: ""
+  db: 0
+
+prometheus:
+  address: http://prometheus:9090
+  timeout: 30
+
+elasticsearch:
+  address: http://elasticsearch:9200
+  index: filebeat-*
+  username: ""
+  password: ""
+  timeout: 30
+
+jenkins:
+  url: http://jenkins:8080
+  username: admin
+  token: ""
+
+argocd:
+  url: https://argocd.example.com
+  token: ""
+
+ai:
+  enabled: false
+  provider: openai
+  baseUrl: https://api.openai.com/v1
+  apiKey: ""
+  model: gpt-4o-mini
+
+auth:
+  enabled: true
+  jwtSecret: "change-me-in-production"
+  jwtExpiration: 24
+
+# 环境配置（dev/test/production）
+environment: dev
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

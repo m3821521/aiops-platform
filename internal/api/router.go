@@ -1,8 +1,10 @@
 package api
 
 import (
+	"github.com/aiops/aiops-platform/internal/audit"
 	"github.com/aiops/aiops-platform/internal/handler"
 	"github.com/aiops/aiops-platform/internal/middleware"
+	"github.com/aiops/aiops-platform/internal/redisutil"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	swaggerFiles "github.com/swaggo/files"
@@ -22,6 +24,8 @@ type Deps struct {
 	Jenkins    *handler.JenkinsHandler
 	ArgoCD     *handler.ArgoCDHandler
 	Auth       *handler.AuthHandler
+	Audit      *handler.AuditHandler
+	RateLimit  *redisutil.RateLimiter
 }
 
 func NewRouter(mode string, deps Deps) *gin.Engine {
@@ -49,6 +53,16 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 
 	v1 := r.Group("/api/v1")
 	{
+		// API 限流中间件。
+		if deps.RateLimit != nil {
+			v1.Use(deps.RateLimit.Middleware())
+		}
+
+		// 审计中间件：自动记录所有写操作。
+		if deps.Audit != nil && deps.Audit.Repo != nil {
+			v1.Use(audit.Middleware(deps.Audit.Repo))
+		}
+
 		v1.GET("/clusters", deps.Cluster.ListClusters)
 		v1.GET("/nodes", deps.Cluster.ListNodes)
 		v1.GET("/namespaces", deps.Cluster.ListNamespaces)
@@ -123,6 +137,10 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 			v1.GET("/users", deps.Auth.ListUsers)
 			v1.POST("/users", deps.Auth.CreateUser)
 			v1.GET("/roles", deps.Auth.ListRoles)
+		}
+
+		if deps.Audit != nil {
+			v1.GET("/audit-logs", deps.Audit.List)
 		}
 	}
 

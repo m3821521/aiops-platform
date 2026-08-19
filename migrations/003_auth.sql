@@ -99,7 +99,7 @@ ON DUPLICATE KEY UPDATE role_id=role_id;
 -- 默认管理员用户（密码: admin123，bcrypt hash）
 -- 生产环境请立即修改密码
 INSERT INTO users (username, password_hash, email, full_name, status) VALUES
-    ('admin', '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', 'admin@example.com', 'System Admin', 'active')
+    ('admin', '$2a$10$kJOvYGMzZmnNBpno2Fa3cuxkIy5.bhmOPwz1Uvh/PLmmdPTT0W5Yy', 'admin@example.com', 'System Admin', 'active')
 ON DUPLICATE KEY UPDATE username=username;
 
 -- 给 admin 用户分配 admin 角色
