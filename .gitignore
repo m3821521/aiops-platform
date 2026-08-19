@@ -11,6 +11,12 @@ vendor/
 coverage.out
 *.test
 
+# Node / Frontend
+node_modules/
+frontend/dist/
+web/dist/
+*.tsbuildinfo
+
 # IDE
 .idea/
 .vscode/
@@ -20,9 +26,16 @@ coverage.out
 logs/
 *.log
 
+# Environment variables (never commit real secrets)
+.env
+.env.local
+.env.*.local
+
 # Local secrets — never commit kubeconfig / tokens
 configs/config.yaml
 configs/clusters.yaml
+backend/configs/config.yaml
+backend/configs/clusters.yaml
 secrets/
 *.kubeconfig
 kubeconfig
