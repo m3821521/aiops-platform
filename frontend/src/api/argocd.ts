@@ -2,9 +2,12 @@ import request from './client'
 import type { ArgoApp } from '@/types'
 
 export const argocdApi = {
-  apps: () => request.get<any, ArgoApp[]>('/api/v1/argocd/apps'),
-  app: (name: string) => request.get<any, ArgoApp>(`/api/v1/argocd/apps/${name}`),
-  sync: (name: string) => request.post(`/api/v1/argocd/apps/${name}/sync`),
-  refresh: (name: string, hard?: boolean) =>
-    request.post(`/api/v1/argocd/apps/${name}/refresh`, null, { params: { hard } }),
+  apps: (connectionId?: number) =>
+    request.get<any, ArgoApp[]>('/api/v1/argocd/apps', { params: connectionId ? { connection_id: connectionId } : {} }),
+  app: (name: string, connectionId?: number) =>
+    request.get<any, ArgoApp>(`/api/v1/argocd/apps/${name}`, { params: connectionId ? { connection_id: connectionId } : {} }),
+  sync: (name: string, connectionId?: number) =>
+    request.post(`/api/v1/argocd/apps/${name}/sync`, null, { params: connectionId ? { connection_id: connectionId } : {} }),
+  refresh: (name: string, hard?: boolean, connectionId?: number) =>
+    request.post(`/api/v1/argocd/apps/${name}/refresh`, null, { params: { ...(hard ? { hard: 'true' } : {}), ...(connectionId ? { connection_id: connectionId } : {}) } }),
 }

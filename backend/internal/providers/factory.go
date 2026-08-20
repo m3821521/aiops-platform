@@ -318,3 +318,86 @@ func (f *Factory) BuildArgoCDClient(ctx context.Context) (*automation.ArgoCDClie
 
 	return automation.NewArgoCDClient(baseURL, token, timeoutSec), nil
 }
+
+// BuildJenkinsClientByID 按 Connection ID 创建 *automation.JenkinsClient。
+// 用于 Action 级别指定 Connection 的场景。
+func (f *Factory) BuildJenkinsClientByID(ctx context.Context, connectionID int64) (*automation.JenkinsClient, error) {
+	conn, err := f.connMgr.GetByID(ctx, connectionID)
+	if err != nil {
+		return nil, fmt.Errorf("获取 Jenkins Connection 失败: %w", err)
+	}
+	if conn == nil {
+		return nil, fmt.Errorf("jenkins connection not found: %d", connectionID)
+	}
+	if conn.Type != connection.TypeJenkins {
+		return nil, fmt.Errorf("connection type mismatch: expected jenkins, got %s", conn.Type)
+	}
+	if !conn.Enabled {
+		return nil, fmt.Errorf("jenkins connection is disabled: %d", connectionID)
+	}
+
+	baseURL := conn.Endpoint
+	var username, token string
+	timeoutSec := 30
+
+	if conn.CredentialID != nil && *conn.CredentialID > 0 {
+		credData, err := f.credSvc.GetDecryptedData(ctx, *conn.CredentialID)
+		if err != nil {
+			return nil, fmt.Errorf("获取 Jenkins Credential 失败: %w", err)
+		}
+		username, _ = credData["username"]
+		token, _ = credData["token"]
+		if password, ok := credData["password"]; ok && password != "" && token == "" {
+			token = password
+		}
+	}
+
+	if strings.TrimSpace(baseURL) == "" {
+		return nil, fmt.Errorf("jenkins connection endpoint is empty: %d", connectionID)
+	}
+
+	return automation.NewJenkinsClient(baseURL, username, token, timeoutSec), nil
+}
+
+// BuildArgoCDClientByID 按 Connection ID 创建 *automation.ArgoCDClient。
+// 用于 Action 级别指定 Connection 的场景。
+func (f *Factory) BuildArgoCDClientByID(ctx context.Context, connectionID int64) (*automation.ArgoCDClient, error) {
+	conn, err := f.connMgr.GetByID(ctx, connectionID)
+	if err != nil {
+		return nil, fmt.Errorf("获取 ArgoCD Connection 失败: %w", err)
+	}
+	if conn == nil {
+		return nil, fmt.Errorf("argocd connection not found: %d", connectionID)
+	}
+	if conn.Type != connection.TypeArgoCD {
+		return nil, fmt.Errorf("connection type mismatch: expected argocd, got %s", conn.Type)
+	}
+	if !conn.Enabled {
+		return nil, fmt.Errorf("argocd connection is disabled: %d", connectionID)
+	}
+
+	baseURL := conn.Endpoint
+	var token string
+	timeoutSec := 30
+
+	if strings.Contains(baseURL, "argocd.example.com") {
+		return nil, fmt.Errorf("argocd connection is not configured (placeholder URL): %d", connectionID)
+	}
+
+	if conn.CredentialID != nil && *conn.CredentialID > 0 {
+		credData, err := f.credSvc.GetDecryptedData(ctx, *conn.CredentialID)
+		if err != nil {
+			return nil, fmt.Errorf("获取 ArgoCD Credential 失败: %w", err)
+		}
+		token, _ = credData["token"]
+		if apiKey, ok := credData["api_key"]; ok && apiKey != "" && token == "" {
+			token = apiKey
+		}
+	}
+
+	if strings.TrimSpace(baseURL) == "" {
+		return nil, fmt.Errorf("argocd connection endpoint is empty: %d", connectionID)
+	}
+
+	return automation.NewArgoCDClient(baseURL, token, timeoutSec), nil
+}

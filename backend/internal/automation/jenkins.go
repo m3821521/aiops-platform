@@ -54,6 +54,19 @@ type JenkinsBuild struct {
 	URL       string `json:"url"`
 }
 
+// JenkinsQueueItem 是 Jenkins Queue Item 信息。
+// 触发构建后先进入 Queue，分配 Executor 后 executable 字段才会出现。
+type JenkinsQueueItem struct {
+	ID         int    `json:"id"`
+	Why        string `json:"why"`
+	Blocked    bool   `json:"blocked"`
+	Buildable  bool   `json:"buildable"`
+	Executable *struct {
+		Number int    `json:"number"`
+		URL    string `json:"url"`
+	} `json:"executable,omitempty"`
+}
+
 // ListJobs 列出所有 Job。
 func (c *JenkinsClient) ListJobs(ctx context.Context) ([]JenkinsJob, error) {
 	if c == nil || c.baseURL == "" {
@@ -88,21 +101,22 @@ func (c *JenkinsClient) ListBuilds(ctx context.Context, jobName string) ([]Jenki
 }
 
 // Build 触发 Job 构建（写操作）。
-func (c *JenkinsClient) Build(ctx context.Context, jobName string) error {
+// 返回 Queue Item URL（从 Location 响应头获取），用于后续轮询获取 Build Number。
+func (c *JenkinsClient) Build(ctx context.Context, jobName string) (string, error) {
 	if c == nil || c.baseURL == "" {
-		return fmt.Errorf("Jenkins 未配置")
+		return "", fmt.Errorf("Jenkins 未配置")
 	}
 
 	// 获取 CSRF crumb。
 	crumb, err := c.getCrumb(ctx)
 	if err != nil {
-		return fmt.Errorf("获取 Jenkins crumb 失败: %w", err)
+		return "", fmt.Errorf("获取 Jenkins crumb 失败: %w", err)
 	}
 
 	apiURL := fmt.Sprintf("%s/job/%s/build", c.baseURL, url.PathEscape(jobName))
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.SetBasicAuth(c.username, c.token)
 	if crumb != "" {
@@ -111,15 +125,49 @@ func (c *JenkinsClient) Build(ctx context.Context, jobName string) error {
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("Jenkins 构建返回 %d: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("Jenkins 构建返回 %d: %s", resp.StatusCode, string(body))
 	}
-	return nil
+
+	// 从 Location 响应头获取 Queue Item URL
+	queueURL := resp.Header.Get("Location")
+	return queueURL, nil
+}
+
+// GetQueueItem 获取 Queue Item 信息，用于轮询获取 Build Number。
+// Jenkins 触发构建后先进入 Queue，分配 Executor 后才创建 Build。
+// Queue Item 的 executable 字段包含 Build Number（如果已分配）。
+func (c *JenkinsClient) GetQueueItem(ctx context.Context, queueURL string) (*JenkinsQueueItem, error) {
+	if c == nil || c.baseURL == "" {
+		return nil, fmt.Errorf("Jenkins 未配置")
+	}
+
+	apiURL := strings.TrimRight(queueURL, "/") + "/api/json"
+	var item JenkinsQueueItem
+	if err := c.doGet(ctx, apiURL, &item); err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
+// GetBuild 获取单个 Build 的详细信息。
+func (c *JenkinsClient) GetBuild(ctx context.Context, jobName string, buildNumber int) (*JenkinsBuild, error) {
+	if c == nil || c.baseURL == "" {
+		return nil, fmt.Errorf("Jenkins 未配置")
+	}
+
+	apiURL := fmt.Sprintf("%s/job/%s/%d/api/json?tree=number,result,timestamp,duration,building,url",
+		c.baseURL, url.PathEscape(jobName), buildNumber)
+	var build JenkinsBuild
+	if err := c.doGet(ctx, apiURL, &build); err != nil {
+		return nil, err
+	}
+	return &build, nil
 }
 
 // GetBuildLog 获取构建日志。

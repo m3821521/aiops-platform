@@ -16,15 +16,16 @@ type Handler struct {
 
 // CreateActionRequest 创建 Action 的请求体。
 type CreateActionRequest struct {
-	IncidentID int64                  `json:"incident_id"`
-	ActionType string                 `json:"action_type" binding:"required"`
-	TargetType string                 `json:"target_type"`
-	TargetName string                 `json:"target_name" binding:"required"`
-	Cluster    string                 `json:"cluster"`
-	Namespace  string                 `json:"namespace"`
-	Parameters map[string]interface{} `json:"parameters"`
-	Reason     string                 `json:"reason"`
-	Risk       RiskLevel              `json:"risk"`
+	IncidentID   int64                  `json:"incident_id"`
+	ActionType   string                 `json:"action_type" binding:"required"`
+	TargetType   string                 `json:"target_type"`
+	TargetName   string                 `json:"target_name" binding:"required"`
+	Cluster      string                 `json:"cluster"`
+	ConnectionID *int64                 `json:"connection_id"`
+	Namespace    string                 `json:"namespace"`
+	Parameters   map[string]interface{} `json:"parameters"`
+	Reason       string                 `json:"reason"`
+	Risk         RiskLevel              `json:"risk"`
 }
 
 // Create POST /api/v1/actions
@@ -46,14 +47,15 @@ func (h *Handler) Create(c *gin.Context) {
 
 	userID := getUserID(c)
 	action := &Action{
-		IncidentID: req.IncidentID,
-		ActionType: req.ActionType,
-		TargetType: req.TargetType,
-		TargetName: req.TargetName,
-		Cluster:    req.Cluster,
-		Namespace:  req.Namespace,
-		Reason:     req.Reason,
-		Risk:       req.Risk,
+		IncidentID:   req.IncidentID,
+		ActionType:   req.ActionType,
+		TargetType:   req.TargetType,
+		TargetName:   req.TargetName,
+		Cluster:      req.Cluster,
+		ConnectionID: req.ConnectionID,
+		Namespace:    req.Namespace,
+		Reason:       req.Reason,
+		Risk:         req.Risk,
 	}
 	action.SetParameters(req.Parameters)
 
@@ -225,14 +227,15 @@ func (h *Handler) CreateFromIncident(c *gin.Context) {
 
 	userID := getUserID(c)
 	action := &Action{
-		IncidentID: incidentID,
-		ActionType: req.ActionType,
-		TargetType: req.TargetType,
-		TargetName: req.TargetName,
-		Cluster:    req.Cluster,
-		Namespace:  req.Namespace,
-		Reason:     req.Reason,
-		Risk:       req.Risk,
+		IncidentID:   incidentID,
+		ActionType:   req.ActionType,
+		TargetType:   req.TargetType,
+		TargetName:   req.TargetName,
+		Cluster:      req.Cluster,
+		ConnectionID: req.ConnectionID,
+		Namespace:    req.Namespace,
+		Reason:       req.Reason,
+		Risk:         req.Risk,
 	}
 	action.SetParameters(req.Parameters)
 

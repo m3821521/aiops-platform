@@ -260,6 +260,11 @@ func (m *ConnectionManager) GetByType(ctx context.Context, connType ConnectionTy
 	return nil, nil
 }
 
+// GetByID 按 ID 获取 Connection（仅数据库，不包含 Legacy Config）。
+func (m *ConnectionManager) GetByID(ctx context.Context, id int64) (*Connection, error) {
+	return m.service.GetRawByID(ctx, id)
+}
+
 // ListByType 返回指定类型的所有启用 Connection（数据库 + Legacy Config）。
 // 用于 Provider Factory 创建业务 Client。
 func (m *ConnectionManager) ListByType(ctx context.Context, connType string, enabledOnly bool) ([]*Connection, error) {

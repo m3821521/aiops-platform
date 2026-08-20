@@ -93,8 +93,9 @@ func (r *ConnectionRepository) List(ctx context.Context, filter ConnectionFilter
 		return nil, 0, err
 	}
 
+	// Count 会污染 query 对象，必须使用 Session 创建新会话
 	var connections []Connection
-	err := query.Order("created_at DESC").
+	err := query.Session(&gorm.Session{}).Order("created_at DESC").
 		Offset((page - 1) * pageSize).
 		Limit(pageSize).
 		Find(&connections).Error

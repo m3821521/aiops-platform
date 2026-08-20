@@ -2,13 +2,16 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Table, Card, Tag, Button, Space, Input, Select, Modal, message, Drawer,
-  Descriptions, Timeline, Alert, Typography, Badge, Spin,
+  Descriptions, Timeline, Alert, Typography, Badge, Spin, Form,
 } from 'antd'
 import {
   PlayCircleOutlined, CheckCircleOutlined, CloseCircleOutlined,
-  ThunderboltOutlined, HistoryOutlined, ExperimentOutlined,
+  ThunderboltOutlined, HistoryOutlined, ExperimentOutlined, PlusOutlined,
 } from '@ant-design/icons'
 import { automationApi, type AutomationAction, type DryRunResult } from '@/api/automation'
+import { connectionApi, type ConnectionView } from '@/api/connection'
+import { jenkinsApi } from '@/api/jenkins'
+import { argocdApi } from '@/api/argocd'
 
 const { Text } = Typography
 
@@ -55,6 +58,19 @@ export default function AutomationActions() {
   const [executing, setExecuting] = useState(false)
   const [executions, setExecutions] = useState<any[]>([])
   const [executionsLoading, setExecutionsLoading] = useState(false)
+
+  // 创建 Action
+  const [createOpen, setCreateOpen] = useState(false)
+  const [createForm] = Form.useForm()
+  const [creating, setCreating] = useState(false)
+  const [jenkinsConnections, setJenkinsConnections] = useState<ConnectionView[]>([])
+  const [argocdConnections, setArgoCDConnections] = useState<ConnectionView[]>([])
+  const [jenkinsJobs, setJenkinsJobs] = useState<any[]>([])
+  const [argoApps, setArgoApps] = useState<any[]>([])
+  const [loadingJobs, setLoadingJobs] = useState(false)
+  const [loadingApps, setLoadingApps] = useState(false)
+  const [createActionType, setCreateActionType] = useState<string>('')
+  const [paramList, setParamList] = useState<{ key: string; value: string }[]>([])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -169,6 +185,111 @@ export default function AutomationActions() {
     fetchExecutions(action.id)
   }
 
+  // 打开创建 Modal
+  const openCreate = async () => {
+    createForm.resetFields()
+    setCreateActionType('')
+    setParamList([])
+    setJenkinsJobs([])
+    setArgoApps([])
+    setCreateOpen(true)
+    // 加载 Jenkins 和 ArgoCD Connection 列表
+    try {
+      const [jenkinsRes, argoRes] = await Promise.all([
+        connectionApi.list({ type: 'jenkins', enabled: true, page_size: 100 }),
+        connectionApi.list({ type: 'argocd', enabled: true, page_size: 100 }),
+      ])
+      setJenkinsConnections(jenkinsRes.items)
+      setArgoCDConnections(argoRes.items)
+    } catch (e: any) {
+      message.error('加载 Connection 列表失败: ' + (e?.message || ''))
+    }
+  }
+
+  // action_type 变化时处理
+  const handleActionTypeChange = (type: string) => {
+    setCreateActionType(type)
+    setJenkinsJobs([])
+    setArgoApps([])
+    createForm.setFieldsValue({ connection_id: undefined, target_name: undefined })
+  }
+
+  // 加载 Jenkins Jobs
+  const loadJenkinsJobs = async (connectionId: number) => {
+    setLoadingJobs(true)
+    try {
+      const jobs = await jenkinsApi.jobs(connectionId)
+      setJenkinsJobs(jobs as any[])
+    } catch (e: any) {
+      message.error('加载 Jenkins Jobs 失败: ' + (e?.message || ''))
+      setJenkinsJobs([])
+    } finally {
+      setLoadingJobs(false)
+    }
+  }
+
+  // 加载 ArgoCD Applications
+  const loadArgoApps = async (connectionId: number) => {
+    setLoadingApps(true)
+    try {
+      const apps = await argocdApi.apps(connectionId)
+      setArgoApps(apps as any[])
+    } catch (e: any) {
+      message.error('加载 ArgoCD Applications 失败: ' + (e?.message || ''))
+      setArgoApps([])
+    } finally {
+      setLoadingApps(false)
+    }
+  }
+
+  // Connection 变化时加载 Jobs/Apps
+  const handleConnectionChange = (connectionId: number) => {
+    if (createActionType === 'jenkins_build') {
+      loadJenkinsJobs(connectionId)
+    } else if (createActionType === 'argocd_sync') {
+      loadArgoApps(connectionId)
+    }
+  }
+
+  // 提交创建
+  const handleCreateSubmit = async () => {
+    try {
+      const values = await createForm.validateFields()
+      setCreating(true)
+
+      // 构建 parameters
+      const parameters: Record<string, any> = {}
+      if (values.action_type === 'scale_deployment' && values.replicas) {
+        parameters.replicas = Number(values.replicas)
+      }
+      paramList.forEach((p) => {
+        if (p.key) parameters[p.key] = p.value
+      })
+
+      const data: any = {
+        action_type: values.action_type,
+        target_type: values.target_type || '',
+        target_name: values.target_name,
+        cluster: values.cluster || '',
+        namespace: values.namespace || '',
+        reason: values.reason || '',
+        risk: values.risk || 'medium',
+      }
+      if (values.connection_id) data.connection_id = values.connection_id
+      if (Object.keys(parameters).length > 0) data.parameters = parameters
+
+      await automationApi.create(data)
+      message.success('操作创建成功，等待审批')
+      setCreateOpen(false)
+      load()
+    } catch (e: any) {
+      if (e?.errorFields) return // 表单验证错误
+      message.error('创建失败: ' + (e?.message || ''))
+    } finally {
+      setCreating(false)
+    }
+  }
+
   const fetchExecutions = async (actionId: number) => {
     setExecutionsLoading(true)
     try {
@@ -269,6 +390,7 @@ export default function AutomationActions() {
         title={<Space><ThunderboltOutlined /> 自动化操作</Space>}
         extra={
           <Space>
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>创建操作</Button>
             <Select
               placeholder="状态"
               allowClear
@@ -471,6 +593,149 @@ export default function AutomationActions() {
           </div>
         )}
       </Drawer>
+
+      {/* 创建 Action Modal */}
+      <Modal
+        title="创建自动化操作"
+        open={createOpen}
+        onCancel={() => setCreateOpen(false)}
+        onOk={handleCreateSubmit}
+        confirmLoading={creating}
+        okText="创建"
+        cancelText="取消"
+        width={640}
+        destroyOnClose
+      >
+        <Form form={createForm} layout="vertical" size="small">
+          <Form.Item
+            name="action_type"
+            label="操作类型"
+            rules={[{ required: true, message: '请选择操作类型' }]}
+          >
+            <Select
+              placeholder="请选择操作类型"
+              onChange={handleActionTypeChange}
+              options={[
+                { value: 'restart_pod', label: '重启 Pod' },
+                { value: 'scale_deployment', label: '扩容 Deployment' },
+                { value: 'jenkins_build', label: 'Jenkins 构建' },
+                { value: 'argocd_sync', label: 'ArgoCD 同步' },
+              ]}
+            />
+          </Form.Item>
+
+          {/* Kubernetes 操作字段 */}
+          {(createActionType === 'restart_pod' || createActionType === 'scale_deployment') && (
+            <>
+              <Form.Item name="cluster" label="集群" rules={[{ required: true, message: '请输入集群名称' }]}>
+                <Input placeholder="例如: local" />
+              </Form.Item>
+              <Form.Item name="namespace" label="命名空间" rules={[{ required: true, message: '请输入命名空间' }]}>
+                <Input placeholder="例如: default" />
+              </Form.Item>
+              <Form.Item name="target_name" label={createActionType === 'restart_pod' ? 'Pod 名称' : 'Deployment 名称'} rules={[{ required: true, message: '请输入名称' }]}>
+                <Input placeholder="请输入名称" />
+              </Form.Item>
+              {createActionType === 'scale_deployment' && (
+                <Form.Item name="replicas" label="目标副本数" rules={[{ required: true, message: '请输入副本数' }]}>
+                  <Input type="number" placeholder="例如: 2" />
+                </Form.Item>
+              )}
+            </>
+          )}
+
+          {/* Jenkins 操作字段 */}
+          {createActionType === 'jenkins_build' && (
+            <>
+              <Form.Item name="connection_id" label="Jenkins Connection" rules={[{ required: true, message: '请选择 Connection' }]}>
+                <Select
+                  placeholder="选择 Jenkins Connection"
+                  onChange={handleConnectionChange}
+                  options={jenkinsConnections.map((c) => ({ value: c.id, label: c.name }))}
+                />
+              </Form.Item>
+              <Form.Item name="target_name" label="Job" rules={[{ required: true, message: '请选择 Job' }]}>
+                <Select
+                  placeholder={loadingJobs ? '加载中...' : '选择 Jenkins Job'}
+                  loading={loadingJobs}
+                  showSearch
+                  options={jenkinsJobs.map((j: any) => ({ value: j.name, label: j.name }))}
+                />
+              </Form.Item>
+            </>
+          )}
+
+          {/* ArgoCD 操作字段 */}
+          {createActionType === 'argocd_sync' && (
+            <>
+              <Form.Item name="connection_id" label="ArgoCD Connection" rules={[{ required: true, message: '请选择 Connection' }]}>
+                <Select
+                  placeholder="选择 ArgoCD Connection"
+                  onChange={handleConnectionChange}
+                  options={argocdConnections.map((c) => ({ value: c.id, label: c.name }))}
+                />
+              </Form.Item>
+              <Form.Item name="target_name" label="Application" rules={[{ required: true, message: '请选择 Application' }]}>
+                <Select
+                  placeholder={loadingApps ? '加载中...' : '选择 ArgoCD Application'}
+                  loading={loadingApps}
+                  showSearch
+                  options={argoApps.map((a: any) => ({ value: a.metadata?.name || a.name, label: a.metadata?.name || a.name }))}
+                />
+              </Form.Item>
+            </>
+          )}
+
+          {/* 通用参数配置（Jenkins/ArgoCD） */}
+          {(createActionType === 'jenkins_build' || createActionType === 'argocd_sync') && (
+            <Form.Item label="参数配置">
+              <Space direction="vertical" style={{ width: '100%' }}>
+                {paramList.map((p, idx) => (
+                  <Space key={idx}>
+                    <Input
+                      placeholder="参数名"
+                      value={p.key}
+                      onChange={(e) => {
+                        const newList = [...paramList]
+                        newList[idx].key = e.target.value
+                        setParamList(newList)
+                      }}
+                      style={{ width: 150 }}
+                    />
+                    <Input
+                      placeholder="参数值"
+                      value={p.value}
+                      onChange={(e) => {
+                        const newList = [...paramList]
+                        newList[idx].value = e.target.value
+                        setParamList(newList)
+                      }}
+                      style={{ width: 200 }}
+                    />
+                    <Button type="link" danger onClick={() => setParamList(paramList.filter((_, i) => i !== idx))}>删除</Button>
+                  </Space>
+                ))}
+                <Button type="dashed" onClick={() => setParamList([...paramList, { key: '', value: '' }])}>+ 添加参数</Button>
+              </Space>
+            </Form.Item>
+          )}
+
+          <Form.Item name="reason" label="原因">
+            <Input.TextArea rows={2} placeholder="请输入操作原因" />
+          </Form.Item>
+
+          <Form.Item name="risk" label="风险等级" initialValue="medium">
+            <Select
+              options={[
+                { value: 'low', label: 'Low' },
+                { value: 'medium', label: 'Medium' },
+                { value: 'high', label: 'High' },
+                { value: 'critical', label: 'Critical' },
+              ]}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   )
 }

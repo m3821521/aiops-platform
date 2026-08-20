@@ -53,16 +53,18 @@ type SearchQuery struct {
 
 // LogHit 是单条日志命中。
 type LogHit struct {
-	Index     string                 `json:"_index"`
-	ID        string                 `json:"_id"`
-	Score     float64                `json:"_score"`
-	Source    map[string]interface{} `json:"_source"`
-	Timestamp time.Time              `json:"@timestamp,omitempty"`
-	Message   string                 `json:"message,omitempty"`
+	Index     string                 `json:"_index,omitempty"`
+	ID        string                 `json:"_id,omitempty"`
+	Score     float64                `json:"_score,omitempty"`
+	Source    map[string]interface{} `json:"raw,omitempty"`
+	Timestamp time.Time              `json:"timestamp"`
+	Message   string                 `json:"message"`
 	Level     string                 `json:"level,omitempty"`
 	Namespace string                 `json:"namespace,omitempty"`
 	Pod       string                 `json:"pod,omitempty"`
 	Container string                 `json:"container,omitempty"`
+	TraceID   string                 `json:"trace_id,omitempty"`
+	RequestID string                 `json:"request_id,omitempty"`
 }
 
 // SearchResult 是查询结果。
@@ -148,11 +150,13 @@ func buildQueryDSL(q SearchQuery) esQuery {
 	var must []map[string]interface{}
 	var filter []map[string]interface{}
 
-	// 全文搜索。
+	// 全文搜索（兼容多种日志格式：message / log / log.message）。
 	if q.Keyword != "" {
 		must = append(must, map[string]interface{}{
-			"match": map[string]interface{}{
-				"message": q.Keyword,
+			"multi_match": map[string]interface{}{
+				"query":  q.Keyword,
+				"fields": []string{"message", "log", "log.message", "body", "@message"},
+				"type":   "best_fields",
 			},
 		})
 	}
@@ -346,6 +350,13 @@ func parseSearchResponse(data []byte) (*SearchResult, error) {
 			if v, ok := h.Source["container"].(string); ok {
 				hit.Container = v
 			}
+		}
+		// 解析 trace_id / request_id。
+		if v, ok := h.Source["trace_id"].(string); ok {
+			hit.TraceID = v
+		}
+		if v, ok := h.Source["request_id"].(string); ok {
+			hit.RequestID = v
 		}
 		result.Hits = append(result.Hits, hit)
 	}

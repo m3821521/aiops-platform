@@ -431,15 +431,24 @@ func (s *Service) Execute(ctx context.Context, workflowID, userID int64) (*Workf
 
 			// 执行当前 attempt
 			stepStarted := time.Now()
+
+			// 创建 Step Timeout Context（每个 attempt 独立计算 timeout）
+			// Retry Delay 不计入 Step Timeout，因此使用原始 ctx 作为 parent
+			timeoutSec := step.TimeoutSec
+			if timeoutSec <= 0 {
+				timeoutSec = 30 // 默认 30 秒，与 gorm default 一致
+			}
+			stepCtx, stepCancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+
 			var success bool
 			var message string
 			var execErr error
 
 			switch step.Type {
 			case StepTypeObservation:
-				success, message, execErr = s.executeObservation(ctx, step, execContext)
+				success, message, execErr = s.executeObservation(stepCtx, step, execContext)
 			case StepTypeInvestigation:
-				success, message, execErr = s.executeInvestigation(ctx, step)
+				success, message, execErr = s.executeInvestigation(stepCtx, step)
 			case StepTypeAutomation:
 				if s.executor == nil {
 					success = false
@@ -447,11 +456,11 @@ func (s *Service) Execute(ctx context.Context, workflowID, userID int64) (*Workf
 					execErr = fmt.Errorf("Action executor 未配置")
 				} else {
 					success, message, execErr = s.executor.ExecuteAction(
-						ctx, step.ActionType, step.Cluster, step.Namespace, step.TargetName, step.GetParameters(),
+						stepCtx, step.ActionType, step.Cluster, step.Namespace, step.TargetName, step.GetParameters(),
 					)
 				}
 			case StepTypeVerification:
-				success, message, execErr = s.executeVerification(ctx, step, execContext)
+				success, message, execErr = s.executeVerification(stepCtx, step, execContext)
 			default:
 				success = false
 				message = fmt.Sprintf("不支持的步骤类型: %s", step.Type)
@@ -461,6 +470,22 @@ func (s *Service) Execute(ctx context.Context, workflowID, userID int64) (*Workf
 			stepFinished := time.Now()
 			step.StartedAt = &stepStarted
 			step.FinishedAt = &stepFinished
+
+			// 区分 Step Timeout 和 Workflow Cancel
+			// 如果原始 ctx 已取消 → Workflow Cancel（不是 timeout）
+			// 如果 stepCtx 超时但原始 ctx 未取消 → Step Timeout
+			if !success && execErr != nil {
+				if ctx.Err() != nil {
+					// Workflow 被取消，保留原始错误语义
+					execErr = fmt.Errorf("workflow cancelled: %w", ctx.Err())
+					message = fmt.Sprintf("Workflow 被取消: %v", ctx.Err())
+				} else if stepCtx.Err() == context.DeadlineExceeded {
+					// Step Timeout
+					execErr = fmt.Errorf("workflow step timeout: exceeded %d seconds", timeoutSec)
+					message = fmt.Sprintf("workflow step timeout: 超过 %d 秒", timeoutSec)
+				}
+			}
+			stepCancel()
 
 			if success {
 				// 成功，记录本次 attempt 并退出 Retry Loop

@@ -89,9 +89,10 @@ func (r *Repository) List(ctx context.Context, filter ListFilter, page, pageSize
 		return nil, 0, err
 	}
 
+	// Count 会污染 query 对象，必须使用 Session 创建新会话
 	var incidents []Incident
 	offset := (page - 1) * pageSize
-	if err := q.Order("start_time DESC").Offset(offset).Limit(pageSize).Find(&incidents).Error; err != nil {
+	if err := q.Session(&gorm.Session{}).Order("start_time DESC").Offset(offset).Limit(pageSize).Find(&incidents).Error; err != nil {
 		return nil, 0, err
 	}
 	return incidents, total, nil

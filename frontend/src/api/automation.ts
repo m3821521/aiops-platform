@@ -8,6 +8,7 @@ export interface AutomationAction {
   target_type: string
   target_name: string
   cluster: string
+  connection_id?: number
   namespace: string
   parameters: string
   reason: string
@@ -58,6 +59,7 @@ export const automationApi = {
     target_type: string
     target_name: string
     cluster: string
+    connection_id?: number
     namespace?: string
     parameters?: Record<string, any>
     reason: string
@@ -82,6 +84,7 @@ export const automationApi = {
     target_type: string
     target_name: string
     cluster: string
+    connection_id?: number
     namespace?: string
     parameters?: Record<string, any>
     reason: string

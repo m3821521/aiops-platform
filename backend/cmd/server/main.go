@@ -320,7 +320,9 @@ func main() {
 	automationPolicy := automation.NewPolicyEngine(cfg.Server.Mode)
 	k8sExecutor := automation.NewKubernetesExecutor(clusterSvc)
 	jenkinsExecutor := automation.NewJenkinsExecutor(jenkinsClient)
+	jenkinsExecutor.SetResolver(providerFactory)
 	argocdExecutor := automation.NewArgoCDExecutor(argocdClient)
+	argocdExecutor.SetResolver(providerFactory)
 	automationService := automation.NewService(actionRepo, executionRepo, automationAuditRepo, automationPolicy, k8sExecutor, jenkinsExecutor, argocdExecutor)
 	// Incident Timeline 集成：Action 执行完成后写入 Incident 信号。
 	automationService.OnExecutionComplete = func(ctx context.Context, incidentID int64, act *automation.Action, result *automation.ExecutionResult) {
@@ -471,8 +473,8 @@ func main() {
 		Automation: &handler.AutomationHandler{Engine: automationEngine},
 		AutomationAction: automationActionHandler,
 		Workflow:        workflowHandler,
-		Jenkins:    &handler.JenkinsHandler{Jenkins: jenkinsClient},
-		ArgoCD:     &handler.ArgoCDHandler{ArgoCD: argocdClient},
+		Jenkins:    &handler.JenkinsHandler{Jenkins: jenkinsClient, Resolver: providerFactory},
+		ArgoCD:     &handler.ArgoCDHandler{ArgoCD: argocdClient, Resolver: providerFactory},
 		Auth:       &handler.AuthHandler{AuthService: authService, UserRepo: userRepo},
 		AuthService: authService,
 		Audit:      &handler.AuditHandler{Repo: auditRepo},

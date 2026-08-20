@@ -73,7 +73,12 @@ func (h *LogsHandler) Search(c *gin.Context) {
 		return
 	}
 
-	response.OK(c, result)
+	// 统一返回格式：{list, total, took}，与前端 API 定义一致。
+	response.OK(c, gin.H{
+		"list":  result.Hits,
+		"total": result.Total,
+		"took":  result.Took,
+	})
 }
 
 // Analyze 处理 GET /api/v1/logs/analyze

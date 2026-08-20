@@ -13,6 +13,7 @@ const Pods = lazy(() => import('@/pages/Kubernetes/Pods'))
 const Deployments = lazy(() => import('@/pages/Kubernetes/Deployments'))
 const Services = lazy(() => import('@/pages/Kubernetes/Services'))
 const AlertRealtime = lazy(() => import('@/pages/Alerts/Realtime'))
+const AlertHistory = lazy(() => import('@/pages/Alerts/History'))
 const MonitoringOverview = lazy(() => import('@/pages/Monitoring/Overview'))
 const PromQL = lazy(() => import('@/pages/Monitoring/PromQL'))
 const LogSearch = lazy(() => import('@/pages/Logs/Search'))
@@ -68,7 +69,7 @@ export const router = createBrowserRouter([
       { path: 'monitoring/promql', element: <LazyPage><PromQL /></LazyPage> },
       // Alerts
       { path: 'alerts/realtime', element: <LazyPage><AlertRealtime /></LazyPage> },
-      { path: 'alerts/history', element: <LazyPage><Placeholder title="告警历史" phase="Phase 5" /></LazyPage> },
+      { path: 'alerts/history', element: <LazyPage><AlertHistory /></LazyPage> },
       { path: 'alerts/aggregate', element: <LazyPage><Placeholder title="告警聚合" phase="Phase 5" /></LazyPage> },
       { path: 'alerts/noise', element: <LazyPage><Placeholder title="告警降噪" phase="Phase 5" /></LazyPage> },
       // AIOps

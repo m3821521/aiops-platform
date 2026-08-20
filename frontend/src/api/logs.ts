@@ -11,7 +11,9 @@ export const logsApi = {
     trace_id?: string
     start?: string
     end?: string
-  }) => request.get<any, { list: LogEntry[]; total: number }>('/api/v1/logs/search', { params }),
+    from?: number
+    size?: number
+  }) => request.get<any, { list: LogEntry[]; total: number; took?: number }>('/api/v1/logs/search', { params }),
   analyze: (params: {
     namespace?: string
     pod?: string

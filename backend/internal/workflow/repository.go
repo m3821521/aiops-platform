@@ -48,9 +48,10 @@ func (r *Repository) List(ctx context.Context, filter ListFilter, page, pageSize
 	var total int64
 	query.Count(&total)
 
+	// Count 会污染 query 对象，必须使用 Session 创建新会话
 	var items []Workflow
 	offset := (page - 1) * pageSize
-	if err := query.Order("id DESC").Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
+	if err := query.Session(&gorm.Session{}).Order("id DESC").Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
 		return nil, 0, err
 	}
 	return items, total, nil
@@ -103,9 +104,10 @@ func (r *Repository) ListExecutionsByWorkflowID(ctx context.Context, workflowID 
 	var total int64
 	query.Count(&total)
 
+	// Count 会污染 query 对象，必须使用 Session 创建新会话
 	var items []WorkflowExecution
 	offset := (page - 1) * pageSize
-	if err := query.Order("id DESC").Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
+	if err := query.Session(&gorm.Session{}).Order("id DESC").Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
 		return nil, 0, err
 	}
 	return items, total, nil

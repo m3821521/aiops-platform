@@ -68,9 +68,10 @@ func (r *ActionRepository) List(ctx context.Context, filter ListFilter, page, pa
 		return nil, 0, err
 	}
 
+	// Count 会污染 query 对象，必须使用 Session 创建新会话
 	var actions []Action
 	offset := (page - 1) * pageSize
-	if err := query.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&actions).Error; err != nil {
+	if err := query.Session(&gorm.Session{}).Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&actions).Error; err != nil {
 		return nil, 0, err
 	}
 	return actions, total, nil
@@ -146,9 +147,10 @@ func (r *AuditRepository) List(ctx context.Context, actionID, incidentID, userID
 		return nil, 0, err
 	}
 
+	// Count 会污染 query 对象，必须使用 Session 创建新会话
 	var audits []AutomationAudit
 	offset := (page - 1) * pageSize
-	if err := query.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&audits).Error; err != nil {
+	if err := query.Session(&gorm.Session{}).Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&audits).Error; err != nil {
 		return nil, 0, err
 	}
 	return audits, total, nil

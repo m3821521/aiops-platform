@@ -37,7 +37,7 @@ func (h *AuditHandler) List(c *gin.Context) {
 	}
 
 	response.OK(c, gin.H{
-		"logs":      logs,
+		"items":     logs,
 		"total":     total,
 		"page":      page,
 		"page_size": pageSize,

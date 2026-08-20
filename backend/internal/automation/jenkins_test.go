@@ -97,7 +97,7 @@ func TestJenkinsBuild(t *testing.T) {
 	defer server.Close()
 
 	client := automation.NewJenkinsClient(server.URL, "admin", "token", 10)
-	err := client.Build(context.Background(), "my-job")
+	_, err := client.Build(context.Background(), "my-job")
 	if err != nil {
 		t.Fatal(err)
 	}

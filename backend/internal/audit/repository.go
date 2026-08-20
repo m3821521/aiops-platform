@@ -60,8 +60,11 @@ func (r *Repository) List(ctx context.Context, filter ListFilter, page, pageSize
 	var total int64
 	query.Count(&total)
 
+	// Count 会污染 query 对象（添加 SELECT count(*)），
+	// 必须使用 Session 创建新会话，否则后续 Find 会返回空结果。
 	var logs []Log
-	err := query.Order("created_at DESC").
+	err := query.Session(&gorm.Session{}).
+		Order("created_at DESC").
 		Offset((page - 1) * pageSize).
 		Limit(pageSize).
 		Find(&logs).Error

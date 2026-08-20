@@ -87,6 +87,7 @@ type Action struct {
 	TargetType    string         `gorm:"size:32" json:"target_type"`
 	TargetName    string         `gorm:"size:256" json:"target_name"`
 	Cluster       string         `gorm:"size:64;index" json:"cluster"`
+	ConnectionID  *int64         `gorm:"index" json:"connection_id,omitempty"`
 	Namespace     string         `gorm:"size:128" json:"namespace"`
 	Parameters    string         `gorm:"type:text" json:"parameters"` // JSON
 	Reason        string         `gorm:"type:text" json:"reason"`
@@ -168,10 +169,11 @@ type DryRunResult struct {
 
 // ExecutionResult 是执行结果。
 type ExecutionResult struct {
-	Success   bool        `json:"success"`
-	Message   string      `json:"message"`
-	Data      interface{} `json:"data,omitempty"`
-	Error     string      `json:"error,omitempty"`
+	Success    bool        `json:"success"`
+	Message    string      `json:"message"`
+	Data       interface{} `json:"data,omitempty"`
+	Error      string      `json:"error,omitempty"`
+	ExternalID string      `json:"external_id,omitempty"`
 }
 
 // validTransitions 定义合法的状态跳转。

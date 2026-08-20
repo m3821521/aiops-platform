@@ -98,6 +98,18 @@ func (s *ConnectionService) GetByID(ctx context.Context, id int64) (*ConnectionV
 	return s.toView(ctx, conn), nil
 }
 
+// GetRawByID 根据 ID 获取原始 Connection（包含 CredentialID，用于内部 Provider 创建）。
+func (s *ConnectionService) GetRawByID(ctx context.Context, id int64) (*Connection, error) {
+	conn, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if conn == nil {
+		return nil, errors.New("connection 不存在")
+	}
+	return conn, nil
+}
+
 // List 分页查询 Connection 列表（脱敏视图）。
 func (s *ConnectionService) List(ctx context.Context, filter ConnectionFilter, page, pageSize int) ([]ConnectionView, int64, error) {
 	connections, total, err := s.repo.List(ctx, filter, page, pageSize)

@@ -2,8 +2,14 @@ package workflow
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	corev1 "k8s.io/api/core/v1"
 )
 
 // ==================== Model Tests ====================
@@ -514,5 +520,550 @@ func TestRetryCountSemantics(t *testing.T) {
 				t.Errorf("RetryCount = %d, want %d", retryCount, tt.expectedRetry)
 			}
 		})
+	}
+}
+
+// ==================== P7-3.2 Timeout Tests ====================
+
+// controllableExecutor 可控的 ActionExecutor，支持延迟和按 attempt 返回不同结果。
+type controllableExecutor struct {
+	delay       time.Duration // 默认执行延迟
+	delays      []time.Duration // 按 attempt 设置延迟（可选）
+	results     []execResult  // 按 attempt 顺序的结果
+	callCount   int
+}
+
+type execResult struct {
+	success bool
+	message string
+	err     error
+}
+
+func (e *controllableExecutor) ExecuteAction(ctx context.Context, actionType, cluster, namespace, targetName string, params map[string]interface{}) (bool, string, error) {
+	e.callCount++
+	attempt := e.callCount
+
+	// 确定本次 attempt 的延迟
+	delay := e.delay
+	if attempt <= len(e.delays) {
+		delay = e.delays[attempt-1]
+	}
+
+	// 延迟执行（模拟长时间操作）
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return false, "context cancelled", ctx.Err()
+		}
+	}
+
+	// 按 attempt 返回不同结果
+	if attempt <= len(e.results) {
+		r := e.results[attempt-1]
+		return r.success, r.message, r.err
+	}
+	// 默认返回成功
+	return true, "success", nil
+}
+
+// slowQuerier 可控的 K8sQuerier，支持延迟。
+type slowQuerier struct {
+	delay time.Duration
+}
+
+func (q *slowQuerier) GetPod(ctx context.Context, cluster, namespace, name string) (*corev1.Pod, error) {
+	if q.delay > 0 {
+		select {
+		case <-time.After(q.delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return &corev1.Pod{}, nil
+}
+
+func (q *slowQuerier) GetPodEvents(ctx context.Context, cluster, namespace, pod string) ([]corev1.Event, error) {
+	return nil, nil
+}
+
+func (q *slowQuerier) ListPods(ctx context.Context, cluster, namespace string) ([]corev1.Pod, error) {
+	return nil, nil
+}
+
+// newTestWorkflowDB 创建 SQLite 内存数据库并 AutoMigrate Workflow 相关表。
+func newTestWorkflowDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&Workflow{}, &WorkflowStep{}, &WorkflowExecution{}, &WorkflowStepExecution{}); err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+// createTestWorkflow 创建一个测试 Workflow 并保存到数据库。
+func createTestWorkflow(t *testing.T, db *gorm.DB, steps []WorkflowStep) *Workflow {
+	t.Helper()
+	wf := &Workflow{
+		Name:        "Test Workflow",
+		Description: "Timeout test",
+		Status:      WorkflowStatusApproved,
+		CreatedBy:   1,
+		Steps:       steps,
+	}
+	repo := NewRepository(db)
+	if err := repo.Create(context.Background(), wf); err != nil {
+		t.Fatal(err)
+	}
+	for i := range wf.Steps {
+		wf.Steps[i].WorkflowID = wf.ID
+		wf.Steps[i].Status = StepStatusPending
+		if err := repo.CreateStep(context.Background(), &wf.Steps[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return wf
+}
+
+func TestTimeoutTrigger(t *testing.T) {
+	db := newTestWorkflowDB(t)
+	executor := &controllableExecutor{delay: 2 * time.Second}
+	svc := NewService(NewRepository(db), executor)
+	svc.SetK8sQuerier(&slowQuerier{})
+
+	steps := []WorkflowStep{
+		{
+			Order:       1,
+			Name:        "Timeout Step",
+			Type:        StepTypeAutomation,
+			ActionType:  "restart_pod",
+			TargetName:  "test-pod",
+			Namespace:   "default",
+			Cluster:     "local",
+			TimeoutSec:  1,
+			MaxRetry:    0,
+			FailureStrategy: FailureStrategyStop,
+		},
+	}
+	wf := createTestWorkflow(t, db, steps)
+
+	result, err := svc.Execute(context.Background(), wf.ID, 2)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	if result.Status != WorkflowStatusFailed {
+		t.Errorf("Workflow status = %s, want failed", result.Status)
+	}
+
+	step := result.Steps[0]
+	if step.Status != StepStatusFailed {
+		t.Errorf("Step status = %s, want failed", step.Status)
+	}
+
+	if !strings.Contains(step.Error, "workflow step timeout") {
+		t.Errorf("Step error = %s, want contains 'workflow step timeout'", step.Error)
+	}
+
+	// DurationMs 应该接近 1000ms
+	if step.FinishedAt != nil && step.StartedAt != nil {
+		duration := step.FinishedAt.Sub(*step.StartedAt).Milliseconds()
+		if duration < 800 || duration > 2000 {
+			t.Errorf("Step duration = %dms, want ~1000ms (800-2000)", duration)
+		}
+	}
+}
+
+func TestNoTimeout(t *testing.T) {
+	db := newTestWorkflowDB(t)
+	executor := &controllableExecutor{delay: 0} // 立即返回
+	svc := NewService(NewRepository(db), executor)
+	svc.SetK8sQuerier(&slowQuerier{})
+
+	steps := []WorkflowStep{
+		{
+			Order:       1,
+			Name:        "Fast Step",
+			Type:        StepTypeAutomation,
+			ActionType:  "restart_pod",
+			TargetName:  "test-pod",
+			Namespace:   "default",
+			Cluster:     "local",
+			TimeoutSec:  5,
+			MaxRetry:    0,
+			FailureStrategy: FailureStrategyStop,
+		},
+	}
+	wf := createTestWorkflow(t, db, steps)
+
+	result, err := svc.Execute(context.Background(), wf.ID, 2)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	if result.Status != WorkflowStatusSuccess {
+		t.Errorf("Workflow status = %s, want success", result.Status)
+	}
+
+	step := result.Steps[0]
+	if step.Status != StepStatusSuccess {
+		t.Errorf("Step status = %s, want success", step.Status)
+	}
+}
+
+func TestTimeoutWithRetry(t *testing.T) {
+	db := newTestWorkflowDB(t)
+	executor := &controllableExecutor{delay: 2 * time.Second} // 每次都超时
+	svc := NewService(NewRepository(db), executor)
+	svc.SetK8sQuerier(&slowQuerier{})
+
+	steps := []WorkflowStep{
+		{
+			Order:       1,
+			Name:        "Timeout Retry Step",
+			Type:        StepTypeAutomation,
+			ActionType:  "restart_pod",
+			TargetName:  "test-pod",
+			Namespace:   "default",
+			Cluster:     "local",
+			TimeoutSec:  1,
+			MaxRetry:    2,
+			RetryDelaySec: 1,
+			FailureStrategy: FailureStrategyStop,
+		},
+	}
+	wf := createTestWorkflow(t, db, steps)
+
+	result, err := svc.Execute(context.Background(), wf.ID, 2)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	if result.Status != WorkflowStatusFailed {
+		t.Errorf("Workflow status = %s, want failed", result.Status)
+	}
+
+	step := result.Steps[0]
+	if step.RetryCount != 2 {
+		t.Errorf("RetryCount = %d, want 2", step.RetryCount)
+	}
+
+	// 验证 StepExecution 记录数量（应该有 3 条：attempt 1,2,3）
+	workflowExecs, _, _ := NewRepository(db).ListExecutionsByWorkflowID(context.Background(), wf.ID, 1, 10)
+	if len(workflowExecs) > 0 {
+		stepExecs, _ := NewRepository(db).ListStepExecutions(context.Background(), workflowExecs[0].ID)
+		if len(stepExecs) != 3 {
+			t.Errorf("StepExecution count = %d, want 3", len(stepExecs))
+		}
+		for i, se := range stepExecs {
+			if se.Attempt != i+1 {
+				t.Errorf("StepExecution[%d].Attempt = %d, want %d", i, se.Attempt, i+1)
+			}
+			if se.Status != StepStatusFailed {
+				t.Errorf("StepExecution[%d].Status = %s, want failed", i, se.Status)
+			}
+		}
+	}
+}
+
+func TestTimeoutWithRetrySuccess(t *testing.T) {
+	db := newTestWorkflowDB(t)
+	// 第1次延迟2秒（超时），第2次立即成功
+	executor := &controllableExecutor{
+		delays: []time.Duration{2 * time.Second, 0},
+		results: []execResult{
+			{success: false, message: "timeout", err: errors.New("timeout")},
+			{success: true, message: "success", err: nil},
+		},
+	}
+	svc := NewService(NewRepository(db), executor)
+	svc.SetK8sQuerier(&slowQuerier{})
+
+	steps := []WorkflowStep{
+		{
+			Order:       1,
+			Name:        "Timeout Then Success",
+			Type:        StepTypeAutomation,
+			ActionType:  "restart_pod",
+			TargetName:  "test-pod",
+			Namespace:   "default",
+			Cluster:     "local",
+			TimeoutSec:  1,
+			MaxRetry:    1,
+			RetryDelaySec: 1,
+			FailureStrategy: FailureStrategyStop,
+		},
+	}
+	wf := createTestWorkflow(t, db, steps)
+
+	result, err := svc.Execute(context.Background(), wf.ID, 2)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	if result.Status != WorkflowStatusSuccess {
+		t.Errorf("Workflow status = %s, want success", result.Status)
+	}
+
+	step := result.Steps[0]
+	if step.RetryCount != 1 {
+		t.Errorf("RetryCount = %d, want 1", step.RetryCount)
+	}
+	if step.Status != StepStatusSuccess {
+		t.Errorf("Step status = %s, want success", step.Status)
+	}
+}
+
+func TestContextCancellationNotTimeout(t *testing.T) {
+	db := newTestWorkflowDB(t)
+	executor := &controllableExecutor{delay: 5 * time.Second}
+	svc := NewService(NewRepository(db), executor)
+	svc.SetK8sQuerier(&slowQuerier{})
+
+	steps := []WorkflowStep{
+		{
+			Order:       1,
+			Name:        "Cancel Test",
+			Type:        StepTypeAutomation,
+			ActionType:  "restart_pod",
+			TargetName:  "test-pod",
+			Namespace:   "default",
+			Cluster:     "local",
+			TimeoutSec:  30,
+			MaxRetry:    0,
+			FailureStrategy: FailureStrategyStop,
+		},
+	}
+	wf := createTestWorkflow(t, db, steps)
+
+	// 创建一个 100ms 后取消的 context（让 Execute 能查询到 Workflow，然后在执行 Step 时取消）
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	result, err := svc.Execute(ctx, wf.ID, 2)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	step := result.Steps[0]
+	// 不应该是 "workflow step timeout"，应该是 cancelled
+	if strings.Contains(step.Error, "workflow step timeout") {
+		t.Errorf("Step error should NOT be timeout, got: %s", step.Error)
+	}
+}
+
+func TestTimeoutPersistence(t *testing.T) {
+	db := newTestWorkflowDB(t)
+	executor := &controllableExecutor{delay: 2 * time.Second}
+	svc := NewService(NewRepository(db), executor)
+	svc.SetK8sQuerier(&slowQuerier{})
+
+	steps := []WorkflowStep{
+		{
+			Order:       1,
+			Name:        "Persistence Test",
+			Type:        StepTypeAutomation,
+			ActionType:  "restart_pod",
+			TargetName:  "test-pod",
+			Namespace:   "default",
+			Cluster:     "local",
+			TimeoutSec:  1,
+			MaxRetry:    0,
+			FailureStrategy: FailureStrategyStop,
+		},
+	}
+	wf := createTestWorkflow(t, db, steps)
+
+	_, err := svc.Execute(context.Background(), wf.ID, 2)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	// 查询 WorkflowExecution
+	workflowExecs, total, err := NewRepository(db).ListExecutionsByWorkflowID(context.Background(), wf.ID, 1, 10)
+	if err != nil {
+		t.Fatalf("ListExecutions error: %v", err)
+	}
+	if total != 1 {
+		t.Errorf("WorkflowExecution count = %d, want 1", total)
+	}
+	if len(workflowExecs) == 0 {
+		t.Fatal("No WorkflowExecution found")
+	}
+
+	we := workflowExecs[0]
+	if we.Status != WorkflowStatusFailed {
+		t.Errorf("WorkflowExecution status = %s, want failed", we.Status)
+	}
+
+	// 查询 WorkflowStepExecution
+	stepExecs, err := NewRepository(db).ListStepExecutions(context.Background(), we.ID)
+	if err != nil {
+		t.Fatalf("ListStepExecutions error: %v", err)
+	}
+	if len(stepExecs) != 1 {
+		t.Errorf("StepExecution count = %d, want 1", len(stepExecs))
+	}
+
+	se := stepExecs[0]
+	if se.Attempt != 1 {
+		t.Errorf("StepExecution.Attempt = %d, want 1", se.Attempt)
+	}
+	if se.Status != StepStatusFailed {
+		t.Errorf("StepExecution.Status = %s, want failed", se.Status)
+	}
+	if !strings.Contains(se.Error, "workflow step timeout") {
+		t.Errorf("StepExecution.Error = %s, want contains 'workflow step timeout'", se.Error)
+	}
+	if se.DurationMs < 800 || se.DurationMs > 2000 {
+		t.Errorf("StepExecution.DurationMs = %d, want ~1000ms (800-2000)", se.DurationMs)
+	}
+}
+
+func TestRetryDelayNotCountedInTimeout(t *testing.T) {
+	db := newTestWorkflowDB(t)
+	executor := &controllableExecutor{delay: 2 * time.Second} // 每次都超时
+	svc := NewService(NewRepository(db), executor)
+	svc.SetK8sQuerier(&slowQuerier{})
+
+	steps := []WorkflowStep{
+		{
+			Order:       1,
+			Name:        "Retry Delay Test",
+			Type:        StepTypeAutomation,
+			ActionType:  "restart_pod",
+			TargetName:  "test-pod",
+			Namespace:   "default",
+			Cluster:     "local",
+			TimeoutSec:  1,
+			MaxRetry:    1,
+			RetryDelaySec: 1,
+			FailureStrategy: FailureStrategyStop,
+		},
+	}
+	wf := createTestWorkflow(t, db, steps)
+
+	start := time.Now()
+	_, err := svc.Execute(context.Background(), wf.ID, 2)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	totalDuration := time.Since(start).Milliseconds()
+
+	// 总时间应该约为: Attempt1(1s) + RetryDelay(1s) + Attempt2(1s) = 3s
+	// 允许 2.5s - 5s 的误差范围
+	if totalDuration < 2500 || totalDuration > 5000 {
+		t.Errorf("Total duration = %dms, want ~3000ms (2500-5000)", totalDuration)
+	}
+
+	// 验证每个 StepExecution 的 DurationMs 都约为 1000ms（不包含 retry delay）
+	workflowExecs, _, _ := NewRepository(db).ListExecutionsByWorkflowID(context.Background(), wf.ID, 1, 10)
+	if len(workflowExecs) > 0 {
+		stepExecs, _ := NewRepository(db).ListStepExecutions(context.Background(), workflowExecs[0].ID)
+		for i, se := range stepExecs {
+			if se.DurationMs < 800 || se.DurationMs > 2000 {
+				t.Errorf("StepExecution[%d].DurationMs = %d, want ~1000ms (800-2000)", i, se.DurationMs)
+			}
+		}
+	}
+}
+
+func TestTimeoutSecZeroUsesDefault(t *testing.T) {
+	db := newTestWorkflowDB(t)
+	executor := &controllableExecutor{delay: 35 * time.Second} // 超过默认30秒
+	svc := NewService(NewRepository(db), executor)
+	svc.SetK8sQuerier(&slowQuerier{})
+
+	steps := []WorkflowStep{
+		{
+			Order:       1,
+			Name:        "Zero Timeout Test",
+			Type:        StepTypeAutomation,
+			ActionType:  "restart_pod",
+			TargetName:  "test-pod",
+			Namespace:   "default",
+			Cluster:     "local",
+			TimeoutSec:  0, // 应该使用默认30秒
+			MaxRetry:    0,
+			FailureStrategy: FailureStrategyStop,
+		},
+	}
+	wf := createTestWorkflow(t, db, steps)
+
+	// 使用一个 1 秒后取消的 context 来验证不会立即超时
+	// 因为 TimeoutSec=0 应该使用默认30秒，所以1秒内不应该超时
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	result, err := svc.Execute(ctx, wf.ID, 2)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	step := result.Steps[0]
+	// 因为 context 在1秒后取消，应该是 cancelled 而不是 timeout
+	if strings.Contains(step.Error, "workflow step timeout") {
+		t.Errorf("Step should be cancelled, not timeout: %s", step.Error)
+	}
+}
+
+func TestP731RetryRegression(t *testing.T) {
+	// 验证 P7-3.1 Retry 功能没有被 Timeout 修改破坏
+	db := newTestWorkflowDB(t)
+	// 第1次失败，第2次成功（不超时）
+	executor := &controllableExecutor{
+		delay: 0,
+		results: []execResult{
+			{success: false, message: "failed", err: errors.New("failed")},
+			{success: true, message: "success", err: nil},
+		},
+	}
+	svc := NewService(NewRepository(db), executor)
+	svc.SetK8sQuerier(&slowQuerier{})
+
+	steps := []WorkflowStep{
+		{
+			Order:       1,
+			Name:        "Retry Regression",
+			Type:        StepTypeAutomation,
+			ActionType:  "restart_pod",
+			TargetName:  "test-pod",
+			Namespace:   "default",
+			Cluster:     "local",
+			TimeoutSec:  30,
+			MaxRetry:    1,
+			RetryDelaySec: 1,
+			FailureStrategy: FailureStrategyStop,
+		},
+	}
+	wf := createTestWorkflow(t, db, steps)
+
+	result, err := svc.Execute(context.Background(), wf.ID, 2)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	if result.Status != WorkflowStatusSuccess {
+		t.Errorf("Workflow status = %s, want success", result.Status)
+	}
+
+	step := result.Steps[0]
+	if step.RetryCount != 1 {
+		t.Errorf("RetryCount = %d, want 1", step.RetryCount)
+	}
+	if step.Status != StepStatusSuccess {
+		t.Errorf("Step status = %s, want success", step.Status)
+	}
+
+	// 验证有2条 StepExecution 记录
+	workflowExecs, _, _ := NewRepository(db).ListExecutionsByWorkflowID(context.Background(), wf.ID, 1, 10)
+	if len(workflowExecs) > 0 {
+		stepExecs, _ := NewRepository(db).ListStepExecutions(context.Background(), workflowExecs[0].ID)
+		if len(stepExecs) != 2 {
+			t.Errorf("StepExecution count = %d, want 2", len(stepExecs))
+		}
 	}
 }

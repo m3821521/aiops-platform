@@ -66,9 +66,10 @@ func (r *ToolAuditRepository) List(ctx context.Context, filter ToolAuditFilter, 
 		return nil, 0, err
 	}
 
+	// Count 会污染 query 对象，必须使用 Session 创建新会话
 	var records []ToolAuditRecord
 	offset := (page - 1) * pageSize
-	if err := query.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&records).Error; err != nil {
+	if err := query.Session(&gorm.Session{}).Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&records).Error; err != nil {
 		return nil, 0, err
 	}
 	return records, total, nil
