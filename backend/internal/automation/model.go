@@ -28,6 +28,34 @@ const (
 	ActionArgoCDSync      = "argocd_sync"
 )
 
+// SupportedActionTypes 是 Automation 支持的操作类型白名单。
+// 只有这些类型可以创建 Automation Action。
+// AI Recommendation 的 action_type (observe/investigate/restart/scale/rollback/config_change/network_check)
+// 需要通过 Frontend 映射后才能使用，不能直接传入。
+var SupportedActionTypes = map[string]bool{
+	ActionRestartPod:      true,
+	ActionScaleDeployment: true,
+	ActionJenkinsBuild:    true,
+	ActionArgoCDSync:      true,
+}
+
+// IsSupportedActionType 检查 action_type 是否是 Automation 支持的类型。
+// 只允许 restart_pod, scale_deployment, jenkins_build, argocd_sync。
+// 其他类型 (observe, investigate, restart, scale, rollback, config_change, network_check)
+// 不属于 Automation，应该走 Investigation / Monitoring 流程。
+func IsSupportedActionType(actionType string) bool {
+	return SupportedActionTypes[actionType]
+}
+
+// GetSupportedActionTypes 返回所有支持的操作类型列表。
+func GetSupportedActionTypes() []string {
+	types := make([]string, 0, len(SupportedActionTypes))
+	for t := range SupportedActionTypes {
+		types = append(types, t)
+	}
+	return types
+}
+
 // RiskLevel 是风险等级。
 type RiskLevel string
 

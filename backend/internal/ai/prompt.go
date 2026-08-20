@@ -32,7 +32,7 @@ func SystemPrompt() string {
     {"resource_type": "pod|node|deployment|service", "resource_name": "名称", "namespace": "命名空间", "impact_level": "critical|high|medium|low"}
   ],
   "recommendations": [
-    {"priority": "P0|P1|P2|P3", "title": "标题", "description": "描述", "reason": "原因", "risk": "low|medium|high|critical", "action_type": "observe|investigate|restart|scale|rollback|config_change|network_check"}
+    {"priority": "P0|P1|P2|P3", "title": "标题", "description": "描述", "reason": "原因", "risk": "low|medium|high|critical", "action_type": "observe|investigate|restart|scale|rollback|config_change|network_check", "target": "目标资源名(如pod名称/deployment名称)", "namespace": "命名空间", "parameters": {"key": "value"}}
   ],
   "risks": [
     {"level": "low|medium|high|critical", "description": "风险描述"}
@@ -45,7 +45,7 @@ func SystemPrompt() string {
 ## 注意
 - confidence 必须反映证据充分程度，证据不足时 < 0.5。
 - evidence 必须全部来自提供的 Context，禁止编造。
-- recommendations 中的 restart/scale/rollback 等高风险操作必须标注 risk。
+- recommendations 中的 restart/scale/rollback 等高风险操作必须标注 risk，并包含 target、namespace、parameters。
 - 不要建议自动执行危险操作，所有操作都需要人工确认。`
 }
 

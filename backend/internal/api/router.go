@@ -1,10 +1,12 @@
 package api
 
 import (
+	"github.com/aiops/aiops-platform/internal/agent"
 	"github.com/aiops/aiops-platform/internal/audit"
 	"github.com/aiops/aiops-platform/internal/ai"
 	"github.com/aiops/aiops-platform/internal/auth"
 	"github.com/aiops/aiops-platform/internal/automation"
+	"github.com/aiops/aiops-platform/internal/connection"
 	"github.com/aiops/aiops-platform/internal/handler"
 	"github.com/aiops/aiops-platform/internal/incident"
 	"github.com/aiops/aiops-platform/internal/middleware"
@@ -26,6 +28,11 @@ type Deps struct {
 	RCA        *handler.RCAHandler
 	Logs       *handler.LogsHandler
 	AI         *handler.AIHandler
+	AIConfig   *handler.AIConfigHandler
+	AIConversation *ai.ConversationHandler
+	Agent      *agent.Handler
+	Connection *connection.Handler
+	Search     *handler.SearchHandler
 	Automation *handler.AutomationHandler
 	AutomationAction *automation.Handler
 	Workflow        *workflow.Handler
@@ -81,9 +88,11 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 		v1.GET("/clusters", deps.Cluster.ListClusters)
 		v1.GET("/nodes", deps.Cluster.ListNodes)
 		v1.GET("/nodes/:name", deps.Cluster.GetNode)
+		v1.GET("/nodes/metrics", deps.Cluster.GetNodeMetrics)
 		v1.GET("/namespaces", deps.Cluster.ListNamespaces)
 		v1.GET("/pods", deps.Cluster.ListPods)
 		v1.GET("/pods/:name", deps.Cluster.GetPod)
+		v1.GET("/pods/metrics", deps.Cluster.GetPodMetrics)
 		v1.GET("/deployments", deps.Cluster.ListDeployments)
 		v1.GET("/deployments/:name", deps.Cluster.GetDeployment)
 		v1.GET("/statefulsets", deps.Cluster.ListStatefulSets)
@@ -130,6 +139,51 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 			v1.GET("/ai/audit", deps.AI.ListAudit)
 		}
 
+		if deps.AIConfig != nil {
+			v1.GET("/ai/config", deps.AIConfig.GetConfig)
+			v1.POST("/ai/config", deps.AIConfig.UpdateConfig)
+		}
+
+		if deps.AIConversation != nil {
+			v1.GET("/ai/conversations", deps.AIConversation.ListConversations)
+			v1.GET("/ai/conversations/:id", deps.AIConversation.GetConversation)
+			v1.DELETE("/ai/conversations/:id", deps.AIConversation.DeleteConversation)
+		}
+
+		if deps.Agent != nil {
+			v1.POST("/agent/orchestrate", deps.Agent.Orchestrate)
+			v1.GET("/agent/results", deps.Agent.ListResults)
+			v1.GET("/agent/results/:id", deps.Agent.GetResult)
+			v1.GET("/agent/results/:id/events", deps.Agent.GetEvents)
+			v1.POST("/agent/results/:id/approve", deps.Agent.Approve)
+			v1.POST("/agent/results/:id/reject", deps.Agent.Reject)
+			v1.GET("/agents", deps.Agent.ListAgents)
+		}
+
+		if deps.Connection != nil {
+			// Connection CRUD
+			v1.GET("/connections", deps.Connection.ListConnections)
+			v1.GET("/connections/types", deps.Connection.ListConnectionTypes)
+			v1.GET("/connections/:id", deps.Connection.GetConnection)
+			v1.POST("/connections", deps.Connection.CreateConnection)
+			v1.PUT("/connections/:id", deps.Connection.UpdateConnection)
+			v1.DELETE("/connections/:id", deps.Connection.DeleteConnection)
+			v1.POST("/connections/:id/enable", deps.Connection.EnableConnection)
+			v1.POST("/connections/:id/disable", deps.Connection.DisableConnection)
+			v1.POST("/connections/:id/test", deps.Connection.TestConnection)
+
+			// Credential CRUD
+			v1.GET("/credentials", deps.Connection.ListCredentials)
+			v1.GET("/credentials/:id", deps.Connection.GetCredential)
+			v1.POST("/credentials", deps.Connection.CreateCredential)
+			v1.PUT("/credentials/:id", deps.Connection.UpdateCredential)
+			v1.DELETE("/credentials/:id", deps.Connection.DeleteCredential)
+		}
+
+		if deps.Search != nil {
+			v1.GET("/search", deps.Search.Search)
+		}
+
 		if deps.Automation != nil {
 			v1.GET("/automation/pods/:pod/logs", deps.Automation.GetPodLogs)
 			v1.GET("/automation/pods/:pod/events", deps.Automation.GetPodEvents)
@@ -167,6 +221,9 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 			wfGroup.POST("/workflows/:id/approve", auth.RequirePermission("automation", "approve"), deps.Workflow.Approve)
 			wfGroup.POST("/workflows/:id/execute", auth.RequirePermission("automation", "execute"), deps.Workflow.Execute)
 			wfGroup.POST("/workflows/:id/cancel", deps.Workflow.Cancel)
+			wfGroup.POST("/workflows/:id/dry-run", deps.Workflow.DryRun)
+			wfGroup.GET("/workflows/:id/executions", deps.Workflow.ListExecutions)
+			wfGroup.GET("/workflow-executions/:id", deps.Workflow.GetExecution)
 		}
 
 		if deps.Jenkins != nil {
@@ -190,6 +247,10 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 			v1.GET("/auth/me", deps.Auth.Me)
 			v1.GET("/users", deps.Auth.ListUsers)
 			v1.POST("/users", deps.Auth.CreateUser)
+			v1.PUT("/users/:id", deps.Auth.UpdateUser)
+			v1.PUT("/users/:id/status", deps.Auth.UpdateUserStatus)
+			v1.PUT("/users/:id/password", deps.Auth.ResetPassword)
+			v1.PUT("/users/:id/roles", deps.Auth.AssignRoles)
 			v1.GET("/roles", deps.Auth.ListRoles)
 		}
 

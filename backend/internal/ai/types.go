@@ -140,12 +140,15 @@ type ImpactItem struct {
 
 // Recommendation 是 AI 建议。
 type Recommendation struct {
-	Priority    string `json:"priority"` // P0/P1/P2/P3
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Reason      string `json:"reason"`
-	Risk        string `json:"risk"` // low/medium/high/critical
-	ActionType  string `json:"action_type"` // observe/investigate/restart/scale/rollback/config_change/network_check
+	Priority    string                 `json:"priority"`    // P0/P1/P2/P3
+	Title       string                 `json:"title"`
+	Description string                 `json:"description"`
+	Reason      string                 `json:"reason"`
+	Risk        string                 `json:"risk"`        // low/medium/high/critical
+	ActionType  string                 `json:"action_type"` // observe/investigate/restart/scale/rollback/config_change/network_check
+	Target      string                 `json:"target"`      // 目标资源，如 pod名称/deployment名称
+	Namespace   string                 `json:"namespace"`   // 命名空间
+	Parameters  map[string]interface{} `json:"parameters"`  // 操作参数，如 replicas: 3
 }
 
 // Risk 是风险评估。

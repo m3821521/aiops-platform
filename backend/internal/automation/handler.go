@@ -1,6 +1,7 @@
 package automation
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/aiops/aiops-platform/internal/auth"
@@ -31,6 +32,15 @@ func (h *Handler) Create(c *gin.Context) {
 	var req CreateActionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "请求体格式错误: "+err.Error())
+		return
+	}
+
+	// action_type 白名单校验。
+	// 只允许 restart_pod, scale_deployment, jenkins_build, argocd_sync。
+	// 其他类型 (observe, investigate, restart, scale, rollback, config_change, network_check)
+	// 不属于 Automation，应该走 Investigation / Monitoring 流程。
+	if !IsSupportedActionType(req.ActionType) {
+		response.BadRequest(c, fmt.Sprintf("不支持的操作类型: %s，支持的类型: %v", req.ActionType, GetSupportedActionTypes()))
 		return
 	}
 
@@ -204,6 +214,12 @@ func (h *Handler) CreateFromIncident(c *gin.Context) {
 	var req CreateActionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "请求体格式错误: "+err.Error())
+		return
+	}
+
+	// action_type 白名单校验。
+	if !IsSupportedActionType(req.ActionType) {
+		response.BadRequest(c, fmt.Sprintf("不支持的操作类型: %s，支持的类型: %v", req.ActionType, GetSupportedActionTypes()))
 		return
 	}
 

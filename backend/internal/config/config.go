@@ -173,6 +173,25 @@ func Load(path string) (*Config, error) {
 	if cfg.AI.Timeout <= 0 {
 		cfg.AI.Timeout = 60
 	}
+	// 环境变量覆盖（生产环境通过 Secret 注入，避免密钥写入配置文件）
+	if v := strings.TrimSpace(os.Getenv("AI_ENABLED")); v != "" {
+		cfg.AI.Enabled = v == "true" || v == "1"
+	}
+	if v := strings.TrimSpace(os.Getenv("AI_PROVIDER")); v != "" {
+		cfg.AI.Provider = v
+	}
+	if v := strings.TrimSpace(os.Getenv("AI_BASE_URL")); v != "" {
+		cfg.AI.BaseURL = v
+	}
+	if v := strings.TrimSpace(os.Getenv("AI_API_KEY")); v != "" {
+		cfg.AI.APIKey = v
+	}
+	if v := strings.TrimSpace(os.Getenv("AI_MODEL")); v != "" {
+		cfg.AI.Model = v
+	}
+	if v := strings.TrimSpace(os.Getenv("JWT_SECRET")); v != "" {
+		cfg.Auth.JWTSecret = v
+	}
 	if cfg.Jenkins.URL == "" {
 		cfg.Jenkins.URL = "http://127.0.0.1:8080"
 	}

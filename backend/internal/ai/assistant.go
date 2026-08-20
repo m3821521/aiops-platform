@@ -2,7 +2,9 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -35,10 +37,32 @@ type AskRequest struct {
 
 // AskResult 是 AI 助手的回复。
 type AskResult struct {
-	Answer  string    `json:"answer"`
-	Context string    `json:"context,omitempty"` // 收集到的上下文摘要
-	Model   string    `json:"model,omitempty"`
-	AskedAt time.Time `json:"asked_at"`
+	Answer          string           `json:"answer"`
+	Context         string           `json:"context,omitempty"` // 收集到的上下文摘要
+	Model           string           `json:"model,omitempty"`
+	AskedAt         time.Time        `json:"asked_at"`
+	Summary         string           `json:"summary,omitempty"`
+	RootCause       string           `json:"root_cause,omitempty"`
+	Confidence      float64          `json:"confidence,omitempty"`
+	Severity        string           `json:"severity,omitempty"`
+	Evidence        []EvidenceItem   `json:"evidence,omitempty"`
+	PossibleCauses  []PossibleCause  `json:"possible_causes,omitempty"`
+	Recommendations []Recommendation `json:"recommendations,omitempty"`
+	Impact          []ImpactItem     `json:"impact,omitempty"`
+}
+
+// EvidenceItem 是证据项。
+type EvidenceItem struct {
+	Source      string `json:"source"`
+	Description string `json:"description"`
+	Resource    string `json:"resource,omitempty"`
+	Importance  string `json:"importance,omitempty"`
+}
+
+// PossibleCause 是可能原因。
+type PossibleCause struct {
+	Cause      string `json:"cause"`
+	Likelihood string `json:"likelihood,omitempty"`
 }
 
 // Ask 向 AI 助手提问。
@@ -62,12 +86,65 @@ func (a *Assistant) Ask(ctx context.Context, req AskRequest) (*AskResult, error)
 		return nil, fmt.Errorf("调用 AI 模型失败: %w", err)
 	}
 
-	return &AskResult{
+	result := &AskResult{
 		Answer:  answer,
 		Context: contextSummary,
 		Model:   a.provider.Name(),
 		AskedAt: time.Now(),
-	}, nil
+	}
+
+	// 4. 解析 AI 回答中的结构化 JSON。
+	parseStructuredData(answer, result)
+
+	return result, nil
+}
+
+// jsonBlockRegex 匹配 Markdown 中的 JSON 代码块。
+var jsonBlockRegex = regexp.MustCompile("```(?:json)?\\s*\\n([\\s\\S]*?)\\n```")
+
+// parseStructuredData 从 AI 回答中提取结构化 JSON 数据。
+func parseStructuredData(answer string, result *AskResult) {
+	// 尝试提取 JSON 代码块。
+	matches := jsonBlockRegex.FindAllStringSubmatch(answer, -1)
+	if len(matches) == 0 {
+		return
+	}
+
+	// 取最后一个 JSON 代码块（通常是结构化数据）。
+	lastMatch := matches[len(matches)-1]
+	if len(lastMatch) < 2 {
+		return
+	}
+
+	jsonStr := strings.TrimSpace(lastMatch[1])
+	if jsonStr == "" {
+		return
+	}
+
+	var structured struct {
+		Summary        string           `json:"summary"`
+		RootCause      string           `json:"root_cause"`
+		Confidence     float64          `json:"confidence"`
+		Severity       string           `json:"severity"`
+		Evidence       []EvidenceItem   `json:"evidence"`
+		PossibleCauses []PossibleCause  `json:"possible_causes"`
+		Recommendations []Recommendation `json:"recommendations"`
+		Impact         []ImpactItem     `json:"impact"`
+	}
+
+	if err := json.Unmarshal([]byte(jsonStr), &structured); err != nil {
+		// JSON 解析失败，静默忽略，仍然返回纯文本回答。
+		return
+	}
+
+	result.Summary = structured.Summary
+	result.RootCause = structured.RootCause
+	result.Confidence = structured.Confidence
+	result.Severity = structured.Severity
+	result.Evidence = structured.Evidence
+	result.PossibleCauses = structured.PossibleCauses
+	result.Recommendations = structured.Recommendations
+	result.Impact = structured.Impact
 }
 
 // collectContext 收集运维上下文。
@@ -148,9 +225,34 @@ func defaultSystemPrompt() string {
 ## 建议
 给出可执行的排查和修复步骤。
 
+## 结构化数据
+在回答的最后，必须附加一个 JSON 代码块，包含以下结构化字段：
+` + "```json" + `
+{
+  "summary": "问题摘要",
+  "root_cause": "最可能的根因",
+  "confidence": 0.85,
+  "severity": "warning|critical|info",
+  "evidence": [
+    {"source": "prometheus|kubernetes|alertmanager|elasticsearch", "description": "证据描述", "resource": "资源名", "importance": "high|medium|low"}
+  ],
+  "possible_causes": [
+    {"cause": "原因描述", "likelihood": "high|medium|low"}
+  ],
+  "recommendations": [
+    {"priority": "P0|P1|P2|P3", "title": "建议标题", "description": "详细描述", "reason": "原因", "risk": "low|medium|high|critical", "action_type": "observe|investigate|restart|scale|rollback|config_change|network_check", "target": "目标资源名", "namespace": "命名空间", "parameters": {"key": "value"}}
+  ],
+  "impact": [
+    {"resource_type": "pod|node|deployment|service", "resource_name": "名称", "namespace": "命名空间", "impact_level": "critical|high|medium|low"}
+  ]
+}
+` + "```" + `
+
 注意事项：
 - 如果上下文信息不足，明确说明需要补充哪些信息
 - 不要编造不存在的告警或指标
 - 建议要具体、可操作，不要泛泛而谈
-- 涉及危险操作（删除、重启、扩容）时，提醒用户确认后再执行`
+- 涉及危险操作（删除、重启、扩容）时，提醒用户确认后再执行
+- recommendations 中的 restart/scale/rollback 等高风险操作必须标注 risk，并包含 target、namespace、parameters
+- 必须在回答末尾包含完整的 JSON 代码块，这是系统解析结构化数据的唯一来源`
 }

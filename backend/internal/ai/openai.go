@@ -38,6 +38,25 @@ func (p *OpenAIProvider) Name() string {
 	return "openai-compatible"
 }
 
+// SetAPIKey 运行时更新 API Key（用于前端配置）。
+func (p *OpenAIProvider) SetAPIKey(apiKey string) {
+	p.apiKey = apiKey
+}
+
+// SetModel 运行时更新模型名称。
+func (p *OpenAIProvider) SetModel(model string) {
+	if model != "" {
+		p.model = model
+	}
+}
+
+// SetBaseURL 运行时更新 API 地址。
+func (p *OpenAIProvider) SetBaseURL(baseURL string) {
+	if baseURL != "" {
+		p.baseURL = strings.TrimRight(baseURL, "/")
+	}
+}
+
 // openAIRequest 是 OpenAI Chat Completions 请求体。
 type openAIRequest struct {
 	Model    string    `json:"model"`
@@ -96,7 +115,25 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message) (string, 
 	}
 
 	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("LLM 返回 %d: %s", resp.StatusCode, string(respBytes))
+		// 解析错误响应，提取友好的错误信息，不泄露 API Key
+		var errResp openAIResponse
+		_ = json.Unmarshal(respBytes, &errResp)
+		switch resp.StatusCode {
+		case 401:
+			return "", fmt.Errorf("API Key 无效或已过期，请在 AI 配置中检查你的 API Key")
+		case 403:
+			return "", fmt.Errorf("API Key 权限不足，请检查账户权限")
+		case 429:
+			return "", fmt.Errorf("API 请求频率超限，请稍后重试")
+		case 404:
+			return "", fmt.Errorf("模型不存在或 API 地址错误，请检查模型名称和 API 地址")
+		default:
+			if errResp.Error != nil && errResp.Error.Message != "" {
+				// 只返回错误消息，不返回完整 JSON（避免泄露 API Key）
+				return "", fmt.Errorf("AI 服务错误: %s", errResp.Error.Message)
+			}
+			return "", fmt.Errorf("AI 服务返回错误 (HTTP %d)，请稍后重试", resp.StatusCode)
+		}
 	}
 
 	var result openAIResponse

@@ -74,8 +74,8 @@ export default function AppHeader() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        background: theme === 'dark' ? '#001529' : '#fff',
-        borderBottom: '1px solid rgba(0,0,0,0.06)',
+        background: 'var(--bg-header)',
+        borderBottom: '1px solid var(--border-color)',
       }}
     >
       <Space>

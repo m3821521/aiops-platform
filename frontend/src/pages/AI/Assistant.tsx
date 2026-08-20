@@ -2,15 +2,17 @@ import { useState, useRef, useEffect } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import {
   Card, Input, Button, Space, Typography, Spin, Alert, Tag, List, Avatar, Divider,
-  Timeline, Badge,
+  Timeline, Badge, Drawer, Empty, Popconfirm, Modal, Form, message,
 } from 'antd'
 import {
   RobotOutlined, UserOutlined, SendOutlined, ThunderboltOutlined,
   BulbOutlined, CheckCircleOutlined, WarningOutlined, CloseCircleOutlined,
   ExperimentOutlined, DatabaseOutlined, CloudOutlined, AlertOutlined,
-  BarChartOutlined, FileTextOutlined, ApartmentOutlined,
+  BarChartOutlined, FileTextOutlined, ApartmentOutlined, PlusOutlined,
+  DeleteOutlined, HistoryOutlined, MessageOutlined, SettingOutlined,
 } from '@ant-design/icons'
-import { aiApi, type AIAskResponse, type AIToolCall } from '@/api/ai'
+import { aiApi, type AIAskResponse, type AIToolCall, type AIConversation, type AIConfigResponse, type AIAskRecommendation } from '@/api/ai'
+import { automationApi } from '@/api/automation'
 
 const { Text, Paragraph, Title } = Typography
 const { TextArea } = Input
@@ -23,7 +25,7 @@ interface ChatMessage {
   root_cause?: string
   confidence?: number
   evidence?: { source: string; description: string; resource?: string }[]
-  recommendations?: { priority: string; title: string; risk: string }[]
+  recommendations?: AIAskRecommendation[]
   tool_calls?: AIToolCall[]
   timestamp: number
   loading?: boolean
@@ -31,13 +33,89 @@ interface ChatMessage {
 }
 
 const quickQuestions = [
-  '分析这个 Incident',
-  '为什么这个 Pod 异常？',
+  '现在系统有什么异常？',
+  '生产环境有哪些严重告警？',
+  '最近 30 分钟有哪些异常 Pod？',
   '最可能的根因是什么？',
-  '哪些证据支持这个结论？',
-  '影响了哪些服务？',
   '下一步应该怎么处理？',
 ]
+
+/**
+ * Recommendation Router - AI Recommendation 类型路由。
+ *
+ * 明确区分：
+ * - Investigation / Analysis Action (investigate, network_check)
+ * - Monitoring / Observation (observe)
+ * - Automation Action (restart → restart_pod, scale → scale_deployment)
+ * - Unsupported (rollback, config_change)
+ *
+ * 禁止将 investigate/observe 等非 Automation 类型直接传给 automationApi.create()。
+ */
+type RecommendationRoute =
+  | { kind: 'automation'; actionType: string; targetType: string }
+  | { kind: 'investigation'; message: string }
+  | { kind: 'monitoring'; message: string }
+  | { kind: 'unsupported'; message: string }
+
+function routeRecommendation(rec: AIAskRecommendation): RecommendationRoute {
+  const actionType = rec.action_type || ''
+
+  // Automation 类型映射
+  // AI 使用短名 (restart, scale)，Automation 使用长名 (restart_pod, scale_deployment)
+  if (actionType === 'restart') {
+    return { kind: 'automation', actionType: 'restart_pod', targetType: 'pod' }
+  }
+  if (actionType === 'scale' || actionType.includes('deployment')) {
+    return { kind: 'automation', actionType: 'scale_deployment', targetType: 'deployment' }
+  }
+
+  // jenkins_build 和 argocd_sync 直接支持
+  if (actionType === 'jenkins_build' || actionType === 'argocd_sync') {
+    return { kind: 'automation', actionType, targetType: 'service' }
+  }
+
+  // Investigation 类型 - 不创建 Automation Action
+  if (actionType === 'investigate') {
+    return {
+      kind: 'investigation',
+      message: '该建议属于调查分析类型，请进入 Incident Detail 查看 RCA / Investigation',
+    }
+  }
+  if (actionType === 'network_check') {
+    return {
+      kind: 'investigation',
+      message: '该建议属于网络调查类型，暂不支持自动执行，请手动排查',
+    }
+  }
+
+  // Monitoring 类型 - 不创建 Automation Action
+  if (actionType === 'observe') {
+    return {
+      kind: 'monitoring',
+      message: '该建议属于监控观察类型，请进入 Monitoring 页面查看指标',
+    }
+  }
+
+  // 暂不支持的类型
+  if (actionType === 'rollback') {
+    return {
+      kind: 'unsupported',
+      message: '回滚操作暂不支持自动执行，请通过 Jenkins / ArgoCD 手动执行',
+    }
+  }
+  if (actionType === 'config_change') {
+    return {
+      kind: 'unsupported',
+      message: '配置变更暂不支持自动执行，请手动修改配置',
+    }
+  }
+
+  // 未知类型 - 默认不支持
+  return {
+    kind: 'unsupported',
+    message: `不支持的操作类型: ${actionType}，支持的 Automation 类型: restart_pod, scale_deployment, jenkins_build, argocd_sync`,
+  }
+}
 
 const toolIconMap: Record<string, any> = {
   get_incident: AlertOutlined,
@@ -63,6 +141,20 @@ const toolLabelMap: Record<string, string> = {
   get_topology: '查询拓扑',
 }
 
+const riskColorMap: Record<string, string> = {
+  low: 'green',
+  medium: 'gold',
+  high: 'orange',
+  critical: 'red',
+}
+
+const priorityColorMap: Record<string, string> = {
+  P0: 'red',
+  P1: 'orange',
+  P2: 'gold',
+  P3: 'blue',
+}
+
 export default function AIAssistant() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
@@ -71,14 +163,159 @@ export default function AIAssistant() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [conversationId, setConversationId] = useState<number | undefined>(undefined)
+  const [conversations, setConversations] = useState<AIConversation[]>([])
+  const [drawerOpen, setDrawerOpen] = useState(false)
   const [aiEnabled, setAiEnabled] = useState<boolean | null>(null)
+  const [configModalOpen, setConfigModalOpen] = useState(false)
+  const [configLoading, setConfigLoading] = useState(false)
+  const [aiConfig, setAiConfig] = useState<AIConfigResponse | null>(null)
+  const [configForm] = Form.useForm()
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    loadConversations()
+    loadAIConfig()
+    // 检查 AI 是否启用
+    aiApi.ask('ping').then(() => setAiEnabled(true)).catch(() => setAiEnabled(false))
+  }, [])
+
+  const loadAIConfig = async () => {
+    try {
+      const res = await aiApi.getConfig()
+      setAiConfig(res)
+    } catch (e) {
+      // 静默失败
+    }
+  }
+
+  const handleSaveConfig = async () => {
+    try {
+      const values = await configForm.validateFields()
+      setConfigLoading(true)
+      const res = await aiApi.updateConfig({
+        api_key: values.api_key,
+        model: values.model,
+        base_url: values.base_url,
+        provider: values.provider || 'openai',
+      })
+      setAiConfig(res)
+      setAiEnabled(true)
+      message.success('AI 配置已保存')
+      setConfigModalOpen(false)
+      configForm.resetFields()
+      // 重新检查 AI 是否可用
+      aiApi.ask('ping').then(() => setAiEnabled(true)).catch(() => setAiEnabled(false))
+    } catch (e: any) {
+      if (e.errorFields) return // 表单验证错误
+      message.error('保存配置失败: ' + (e?.response?.data?.message || e.message))
+    } finally {
+      setConfigLoading(false)
+    }
+  }
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
   }, [messages])
+
+  // 从 AI 推荐创建 Automation Action
+  // 使用 routeRecommendation 进行类型路由，禁止将 investigate/observe 等非 Automation 类型直接创建 Action
+  const handleCreateActionFromRecommendation = async (rec: AIAskRecommendation) => {
+    try {
+      // 类型路由：区分 Automation / Investigation / Monitoring / Unsupported
+      const route = routeRecommendation(rec)
+
+      if (route.kind === 'automation') {
+        // Automation 类型：创建 Action
+        const action = await automationApi.create({
+          action_type: route.actionType,
+          target_type: route.targetType,
+          target_name: rec.target || '',
+          cluster: 'local',
+          namespace: rec.namespace,
+          parameters: rec.parameters || {},
+          reason: rec.reason || rec.title,
+          risk: rec.risk || 'medium',
+        })
+
+        message.success(`Action #${action.id} 已创建，等待审批`)
+        // 跳转到 Automation 页面
+        navigate('/automation/actions')
+        return
+      }
+
+      if (route.kind === 'investigation') {
+        // Investigation 类型：不创建 Action，提示用户进入 Incident Detail
+        message.info(route.message)
+        // 如果有 incident_id，跳转到 Incident Detail
+        if (rec.incident_id) {
+          navigate(`/incidents/${rec.incident_id}`)
+        }
+        return
+      }
+
+      if (route.kind === 'monitoring') {
+        // Monitoring 类型：不创建 Action，跳转到 Monitoring 页面
+        message.info(route.message)
+        navigate('/observability/metrics')
+        return
+      }
+
+      // Unsupported 类型：显示提示，不创建 Action
+      message.warning(route.message)
+    } catch (e: any) {
+      message.error('创建 Action 失败: ' + (e?.response?.data?.message || e.message))
+    }
+  }
+
+  const loadConversations = async () => {
+    try {
+      const res = await aiApi.listConversations(1, 50)
+      setConversations(res.items || [])
+    } catch (e) {
+      // 静默失败
+    }
+  }
+
+  const newConversation = () => {
+    setMessages([])
+    setConversationId(undefined)
+    setDrawerOpen(false)
+  }
+
+  const loadConversation = async (id: number) => {
+    try {
+      const res = await aiApi.getConversation(id)
+      setConversationId(id)
+      const msgs: ChatMessage[] = (res.messages || []).map((m) => ({
+        id: m.id.toString(),
+        role: m.role,
+        content: m.content,
+        summary: m.summary,
+        root_cause: m.root_cause,
+        confidence: m.confidence,
+        timestamp: new Date(m.created_at).getTime(),
+      }))
+      setMessages(msgs)
+      setDrawerOpen(false)
+    } catch (e) {
+      // 静默失败
+    }
+  }
+
+  const deleteConversation = async (id: number) => {
+    try {
+      await aiApi.deleteConversation(id)
+      if (conversationId === id) {
+        newConversation()
+      }
+      loadConversations()
+    } catch (e) {
+      // 静默失败
+    }
+  }
 
   const sendMessage = async (question: string) => {
     if (!question.trim() || loading) return
@@ -101,15 +338,18 @@ export default function AIAssistant() {
     setLoading(true)
 
     try {
-      const res: AIAskResponse = await aiApi.ask(question, incidentId)
-      setAiEnabled(true)
+      const res = await aiApi.ask(question, incidentId, conversationId)
+      if (res.conversation_id) {
+        setConversationId(res.conversation_id)
+        loadConversations()
+      }
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantMsg.id
             ? {
                 ...m,
                 loading: false,
-                content: res.answer || '分析完成',
+                content: res.answer,
                 summary: res.summary,
                 root_cause: res.root_cause,
                 confidence: res.confidence,
@@ -121,14 +361,11 @@ export default function AIAssistant() {
         ),
       )
     } catch (err: any) {
-      const msg = err?.message || 'AI 助手请求失败'
-      if (msg.includes('未启用') || msg.includes('disabled')) {
-        setAiEnabled(false)
-      }
+      const errorMsg = err?.response?.data?.message || err?.message || 'AI 请求失败'
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantMsg.id
-            ? { ...m, loading: false, error: msg, content: '' }
+            ? { ...m, loading: false, error: errorMsg }
             : m,
         ),
       )
@@ -137,45 +374,157 @@ export default function AIAssistant() {
     }
   }
 
-  const renderToolActivity = (toolCalls?: AIToolCall[]) => {
-    if (!toolCalls || toolCalls.length === 0) return null
+  const renderEvidence = (evidence: ChatMessage['evidence']) => {
+    if (!evidence || evidence.length === 0) return null
     return (
-      <div style={{ marginBottom: 8 }}>
-        <Divider style={{ margin: '8px 0' }} />
-        <Text strong><DatabaseOutlined style={{ color: '#1890ff' }} /> 数据查询</Text>
-        <Timeline
-          style={{ marginTop: 8 }}
-          items={toolCalls.map((tc) => {
-            const Icon = toolIconMap[tc.tool_name] || DatabaseOutlined
-            const label = toolLabelMap[tc.tool_name] || tc.tool_name
-            let color = 'green'
-            let dot = <CheckCircleOutlined style={{ color: '#52c41a' }} />
-            if (!tc.result.success) {
-              color = 'red'
-              dot = <CloseCircleOutlined style={{ color: '#ff4d4f' }} />
-            } else if (!tc.result.available) {
-              color = 'orange'
-              dot = <WarningOutlined style={{ color: '#faad14' }} />
+      <div style={{ marginTop: 12 }}>
+        <Text strong style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+          <DatabaseOutlined style={{ marginRight: 6 }} />证据
+        </Text>
+        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {evidence.map((e, i) => (
+            <div
+              key={i}
+              style={{
+                padding: '8px 12px',
+                background: 'var(--bg-surface-hover)',
+                borderRadius: 6,
+                borderLeft: '3px solid var(--color-primary)',
+                fontSize: 13,
+              }}
+            >
+              <Tag color="blue" style={{ marginRight: 8 }}>{e.source}</Tag>
+              <span>{e.description}</span>
+              {e.resource && <Text type="secondary" style={{ marginLeft: 8 }}>({e.resource})</Text>}
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  const renderRecommendations = (recs: ChatMessage['recommendations']) => {
+    if (!recs || recs.length === 0) return null
+    return (
+      <div style={{ marginTop: 12 }}>
+        <Text strong style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+          <BulbOutlined style={{ marginRight: 6 }} />建议操作
+        </Text>
+        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {recs.map((r, i) => {
+            // 使用 routeRecommendation 进行类型路由
+            const route = routeRecommendation(r)
+            // 按钮文字和图标根据类型显示
+            let buttonText = ''
+            let buttonIcon: React.ReactNode = null
+            let showButton = false
+
+            if (route.kind === 'automation') {
+              buttonText = '创建 Action'
+              buttonIcon = <PlusOutlined />
+              showButton = true
+            } else if (route.kind === 'investigation') {
+              buttonText = '查看分析'
+              buttonIcon = <FileTextOutlined />
+              showButton = true
+            } else if (route.kind === 'monitoring') {
+              buttonText = '查看监控'
+              buttonIcon = <BarChartOutlined />
+              showButton = true
             }
-            return {
-              color,
-              dot,
-              children: (
-                <div>
-                  <Space size={4}>
-                    <Icon />
-                    <Text style={{ fontSize: 12 }}>{label}</Text>
-                    <Tag style={{ fontSize: 10 }}>{tc.result.source}</Tag>
-                    {tc.duration_ms > 0 && <Text type="secondary" style={{ fontSize: 11 }}>{tc.duration_ms}ms</Text>}
-                  </Space>
-                  {!tc.result.available && tc.result.error && (
-                    <div style={{ fontSize: 11, color: '#faad14', marginTop: 2 }}>{tc.result.error}</div>
-                  )}
+            // unsupported 类型不显示按钮
+
+            return (
+              <div
+                key={i}
+                style={{
+                  padding: '10px 12px',
+                  background: 'var(--color-primary-light)',
+                  borderRadius: 6,
+                  border: '1px solid var(--color-primary-border)',
+                  fontSize: 13,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: r.description ? 4 : 0 }}>
+                  <span>
+                    <Tag color={priorityColorMap[r.priority] || 'default'} style={{ marginRight: 8 }}>
+                      {r.priority}
+                    </Tag>
+                    <strong>{r.title}</strong>
+                    {r.target && (
+                      <Tag color="blue" style={{ marginLeft: 8 }}>
+                        {r.target}
+                      </Tag>
+                    )}
+                    {/* 显示操作类型标签 */}
+                    <Tag
+                      color={
+                        route.kind === 'automation' ? 'green' :
+                        route.kind === 'investigation' ? 'orange' :
+                        route.kind === 'monitoring' ? 'blue' : 'default'
+                      }
+                      style={{ marginLeft: 8 }}
+                    >
+                      {route.kind === 'automation' ? '自动化' :
+                       route.kind === 'investigation' ? '调查' :
+                       route.kind === 'monitoring' ? '监控' : '暂不支持'}
+                    </Tag>
+                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Tag color={riskColorMap[r.risk] || 'default'}>风险: {r.risk}</Tag>
+                    {showButton && (
+                      <Button
+                        type="primary"
+                        size="small"
+                        icon={buttonIcon}
+                        onClick={() => handleCreateActionFromRecommendation(r)}
+                      >
+                        {buttonText}
+                      </Button>
+                    )}
+                  </div>
                 </div>
-              ),
-            }
+                {r.description && (
+                  <div style={{ color: 'var(--text-secondary)', fontSize: 12, marginTop: 4 }}>
+                    {r.description}
+                  </div>
+                )}
+                {r.reason && (
+                  <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 2 }}>
+                    原因: {r.reason}
+                  </div>
+                )}
+              </div>
+            )
           })}
-        />
+        </div>
+      </div>
+    )
+  }
+
+  const renderToolCalls = (calls: AIToolCall[]) => {
+    if (!calls || calls.length === 0) return null
+    return (
+      <div style={{ marginTop: 12 }}>
+        <Text strong style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+          <ThunderboltOutlined style={{ marginRight: 6 }} />工具调用
+        </Text>
+        <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {calls.map((c, i) => {
+            const Icon = toolIconMap[c.tool_name] || DatabaseOutlined
+            return (
+              <Tag
+                key={i}
+                icon={<Icon />}
+                color={c.result.success ? 'success' : 'error'}
+                style={{ fontSize: 12 }}
+              >
+                {toolLabelMap[c.tool_name] || c.tool_name}
+                {c.result.available === false && ' (不可用)'}
+              </Tag>
+            )
+          })}
+        </div>
       </div>
     )
   }
@@ -183,207 +532,360 @@ export default function AIAssistant() {
   const renderMessage = (msg: ChatMessage) => {
     if (msg.role === 'user') {
       return (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
-          <div style={{ maxWidth: '70%' }}>
-            <div style={{ background: '#1677ff', color: '#fff', padding: '10px 14px', borderRadius: '12px 12px 2px 12px' }}>
-              <Text style={{ color: '#fff' }}>{msg.content}</Text>
+        <div key={msg.id} style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
+          <div style={{ maxWidth: '70%', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+            <div
+              style={{
+                background: 'var(--color-primary)',
+                color: '#fff',
+                padding: '10px 14px',
+                borderRadius: '12px 12px 2px 12px',
+                fontSize: 14,
+                lineHeight: 1.6,
+              }}
+            >
+              {msg.content}
             </div>
+            <Avatar icon={<UserOutlined />} size="small" style={{ background: 'var(--color-primary)' }} />
           </div>
-          <Avatar icon={<UserOutlined />} style={{ marginLeft: 8, backgroundColor: '#1677ff' }} />
         </div>
       )
     }
 
     return (
-      <div style={{ display: 'flex', marginBottom: 16 }}>
-        <Avatar icon={<RobotOutlined />} style={{ marginRight: 8, backgroundColor: '#722ed1' }} />
-        <div style={{ maxWidth: '85%', flex: 1 }}>
-          {msg.loading ? (
-            <Card size="small" style={{ borderRadius: '2px 12px 12px 12px' }}>
-              <Spin size="small" /> <Text type="secondary">AI 正在分析，正在查询数据...</Text>
-            </Card>
-          ) : msg.error ? (
-            <Alert
-              message="AI 助手不可用"
-              description={msg.error}
-              type="warning"
-              showIcon
-              style={{ borderRadius: '2px 12px 12px 12px' }}
-            />
-          ) : (
-            <Card size="small" style={{ borderRadius: '2px 12px 12px 12px' }}>
-              {renderToolActivity(msg.tool_calls)}
-
-              {msg.summary && (
-                <div style={{ marginBottom: 8 }}>
-                  <Text strong><ThunderboltOutlined style={{ color: '#722ed1' }} /> 摘要</Text>
-                  <div style={{ fontSize: 13, marginTop: 4 }}>{msg.summary}</div>
-                </div>
-              )}
-
-              <Paragraph style={{ marginBottom: 8, whiteSpace: 'pre-wrap' }}>{msg.content}</Paragraph>
-
-              {msg.root_cause && (
-                <div style={{ marginBottom: 8, padding: 8, background: '#fff7e6', borderRadius: 4 }}>
-                  <Text strong style={{ color: '#d46b08' }}>根因: </Text>
-                  <Text>{msg.root_cause}</Text>
-                  {msg.confidence !== undefined && (
-                    <Tag color={msg.confidence > 0.7 ? 'green' : msg.confidence > 0.4 ? 'orange' : 'red'} style={{ marginLeft: 8 }}>
-                      置信度 {(msg.confidence * 100).toFixed(0)}%
-                    </Tag>
-                  )}
-                </div>
-              )}
-
-              {msg.evidence && msg.evidence.length > 0 && (
-                <div style={{ marginBottom: 8 }}>
-                  <Divider style={{ margin: '8px 0' }} />
-                  <Text strong><CheckCircleOutlined style={{ color: '#52c41a' }} /> 证据 ({msg.evidence.length})</Text>
-                  <List
-                    size="small"
-                    style={{ marginTop: 4 }}
-                    dataSource={msg.evidence}
-                    renderItem={(item, i) => (
-                      <List.Item>
-                        <Space size={4}>
-                          <Tag color="blue" style={{ fontSize: 10 }}>{item.source}</Tag>
-                          <Text style={{ fontSize: 12 }}>{i + 1}. {item.description}</Text>
-                        </Space>
-                      </List.Item>
+      <div key={msg.id} style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 16 }}>
+        <div style={{ maxWidth: '85%', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+          <Avatar icon={<RobotOutlined />} size="small" style={{ background: 'var(--color-ai)' }} />
+          <div
+            style={{
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border-color)',
+              padding: '12px 16px',
+              borderRadius: '2px 12px 12px 12px',
+              fontSize: 14,
+              lineHeight: 1.7,
+              minWidth: 200,
+            }}
+          >
+            {msg.loading ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-muted)' }}>
+                <Spin size="small" />
+                <span>AI 正在分析...</span>
+              </div>
+            ) : msg.error ? (
+              <Alert message={msg.error} type="error" showIcon style={{ marginTop: 0 }} />
+            ) : (
+              <>
+                {msg.summary && (
+                  <div style={{ marginBottom: 8, padding: '8px 12px', background: 'var(--color-ai-light)', borderRadius: 6, borderLeft: '3px solid var(--color-ai)' }}>
+                    <Text strong style={{ color: 'var(--color-ai)' }}>摘要</Text>
+                    <div style={{ marginTop: 4, fontSize: 13 }}>{msg.summary}</div>
+                  </div>
+                )}
+                {msg.root_cause && (
+                  <div style={{ marginBottom: 8 }}>
+                    <Text strong style={{ color: 'var(--color-danger)' }}>根因: </Text>
+                    <span>{msg.root_cause}</span>
+                    {msg.confidence != null && (
+                      <Tag color="blue" style={{ marginLeft: 8 }}>置信度 {Math.round(msg.confidence * 100)}%</Tag>
                     )}
-                  />
-                </div>
-              )}
-
-              {msg.recommendations && msg.recommendations.length > 0 && (
-                <div>
-                  <Divider style={{ margin: '8px 0' }} />
-                  <Text strong><BulbOutlined style={{ color: '#faad14' }} /> 建议</Text>
-                  <List
-                    size="small"
-                    style={{ marginTop: 4 }}
-                    dataSource={msg.recommendations}
-                    renderItem={(item, i) => (
-                      <List.Item>
-                        <Space size={4}>
-                          <Tag color={item.priority === 'P0' ? 'red' : item.priority === 'P1' ? 'orange' : 'blue'} style={{ fontSize: 10 }}>
-                            {item.priority}
-                          </Tag>
-                          <Text style={{ fontSize: 12 }}>{i + 1}. {item.title}</Text>
-                          <Tag color={item.risk === 'high' || item.risk === 'critical' ? 'red' : item.risk === 'medium' ? 'orange' : 'green'} style={{ fontSize: 10 }}>
-                            风险: {item.risk}
-                          </Tag>
-                        </Space>
-                      </List.Item>
-                    )}
-                  />
-                </div>
-              )}
-            </Card>
-          )}
+                  </div>
+                )}
+                <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
+                {renderToolCalls(msg.tool_calls || [])}
+                {renderEvidence(msg.evidence)}
+                {renderRecommendations(msg.recommendations)}
+              </>
+            )}
+          </div>
         </div>
       </div>
     )
   }
 
   return (
-    <div style={{ height: 'calc(100vh - 140px)', display: 'flex', flexDirection: 'column' }}>
-      <Space style={{ marginBottom: 16 }} align="center">
-        <ThunderboltOutlined style={{ fontSize: 20, color: '#722ed1' }} />
-        <Text strong style={{ fontSize: 18 }}>AI 运维助手</Text>
-        {aiEnabled === false && <Tag color="warning">未启用</Tag>}
-        {aiEnabled === true && <Tag color="success">已连接</Tag>}
-        {incidentId && (
-          <Badge status="processing" color="#722ed1" text={`Incident #${incidentId}`} />
-        )}
-        {incidentId && (
-          <Button size="small" type="link" onClick={() => navigate('/aiops/incidents')}>
-            返回事件列表
-          </Button>
-        )}
-      </Space>
-
-      {aiEnabled === false && (
-        <Alert
-          message="AI 助手未启用"
-          description="请在后端配置中设置 ai.enabled=true 并配置 LLM Provider（OpenAI / Azure / Ollama 等）。当前可查看界面交互，提问将返回错误提示。"
-          type="info"
-          showIcon
-          style={{ marginBottom: 16 }}
-        />
-      )}
-
+    <div style={{ display: 'flex', height: 'calc(100vh - 64px)', background: 'var(--bg-app)' }}>
+      {/* 侧边栏 - 历史对话 */}
       <div
-        ref={scrollRef}
         style={{
-          flex: 1,
-          overflow: 'auto',
-          padding: 16,
-          background: 'rgba(0,0,0,0.02)',
-          borderRadius: 8,
-          marginBottom: 16,
+          width: 260,
+          background: 'var(--bg-sidebar)',
+          borderRight: '1px solid var(--border-sidebar)',
+          display: 'flex',
+          flexDirection: 'column',
+          flexShrink: 0,
         }}
       >
-        {messages.length === 0 ? (
-          <div style={{ textAlign: 'center', paddingTop: 40 }}>
-            <RobotOutlined style={{ fontSize: 48, color: '#722ed1', marginBottom: 16 }} />
-            <Title level={4}>AIOps 智能运维助手</Title>
-            <Text type="secondary">
-              {incidentId
-                ? `正在分析 Incident #${incidentId}，AI 将自动查询相关数据`
-                : '输入运维问题，AI 将结合监控、日志、告警、Kubernetes 进行分析'}
+        <div style={{ padding: 16, borderBottom: '1px solid var(--border-color)' }}>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            block
+            onClick={newConversation}
+            style={{ marginBottom: 12 }}
+          >
+            新建对话
+          </Button>
+          <Button
+            icon={<HistoryOutlined />}
+            block
+            onClick={() => setDrawerOpen(true)}
+          >
+            历史对话 ({conversations.length})
+          </Button>
+        </div>
+        <div style={{ flex: 1, overflow: 'auto', padding: '8px 0' }}>
+          {conversations.length === 0 ? (
+            <Empty description="暂无对话" style={{ marginTop: 40 }} />
+          ) : (
+            conversations.map((conv) => (
+              <div
+                key={conv.id}
+                onClick={() => loadConversation(conv.id)}
+                style={{
+                  padding: '10px 16px',
+                  cursor: 'pointer',
+                  background: conversationId === conv.id ? 'var(--color-primary-light)' : 'transparent',
+                  borderLeft: conversationId === conv.id ? '3px solid var(--color-primary)' : '3px solid transparent',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-sidebar-hover)')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = conversationId === conv.id ? 'var(--color-primary-light)' : 'transparent')}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <MessageOutlined style={{ marginRight: 6, color: 'var(--text-muted)' }} />
+                    {conv.title || '新对话'}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                    {conv.message_count} 条消息 · {new Date(conv.updated_at).toLocaleDateString()}
+                  </div>
+                </div>
+                <Popconfirm
+                  title="删除此对话？"
+                  onConfirm={(e) => { e?.stopPropagation(); deleteConversation(conv.id) }}
+                  onCancel={(e) => e?.stopPropagation()}
+                  okText="删除"
+                  cancelText="取消"
+                >
+                  <DeleteOutlined
+                    style={{ color: 'var(--text-muted)', fontSize: 14 }}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                </Popconfirm>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* 主聊天区域 */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        {/* 头部 */}
+        <div
+          style={{
+            padding: '16px 24px',
+            background: 'var(--bg-header)',
+            borderBottom: '1px solid var(--border-color)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          <div>
+            <Title level={4} style={{ margin: 0, fontSize: 18 }}>
+              <RobotOutlined style={{ color: 'var(--color-ai)', marginRight: 8 }} />
+              AI 运维助手
+            </Title>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              询问关于 Incident、服务、Pod、指标、日志等问题
             </Text>
-            <div style={{ marginTop: 24 }}>
-              <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>快速提问：</Text>
-              <Space wrap>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {aiConfig && (
+              <Tag color={aiConfig.api_key_set ? 'success' : 'warning'} style={{ margin: 0 }}>
+                {aiConfig.api_key_set ? 'API Key 已配置' : '未配置 API Key'}
+              </Tag>
+            )}
+            <Button
+              type="text"
+              icon={<SettingOutlined />}
+              onClick={() => {
+                configForm.setFieldsValue({
+                  provider: aiConfig?.provider || 'openai',
+                  base_url: aiConfig?.base_url || 'https://api.openai.com/v1',
+                  model: aiConfig?.model || 'gpt-4o-mini',
+                })
+                setConfigModalOpen(true)
+              }}
+            >
+              配置
+            </Button>
+            {incidentId && (
+              <Tag color="blue" icon={<AlertOutlined />}>
+                Incident #{incidentId}
+              </Tag>
+            )}
+          </div>
+        </div>
+
+        {/* 消息区域 */}
+        <div ref={scrollRef} style={{ flex: 1, overflow: 'auto', padding: '24px', background: 'var(--bg-app)' }}>
+          {messages.length === 0 ? (
+            <div style={{ textAlign: 'center', marginTop: 60 }}>
+              <Avatar size={64} icon={<RobotOutlined />} style={{ background: 'var(--color-ai)', marginBottom: 16 }} />
+              <Title level={4} style={{ marginBottom: 8 }}>AI 运维助手</Title>
+              <Text type="secondary" style={{ display: 'block', marginBottom: 24 }}>
+                我可以帮你分析系统异常、查询指标、检索日志、解释根因
+              </Text>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', maxWidth: 600, margin: '0 auto' }}>
                 {quickQuestions.map((q) => (
                   <Tag
                     key={q}
                     color="blue"
-                    style={{ cursor: 'pointer', padding: '4px 12px' }}
+                    style={{ cursor: 'pointer', padding: '6px 12px', fontSize: 13 }}
                     onClick={() => sendMessage(q)}
                   >
                     {q}
                   </Tag>
                 ))}
-              </Space>
+              </div>
             </div>
+          ) : (
+            messages.map(renderMessage)
+          )}
+        </div>
+
+        {/* 输入区域 */}
+        <div style={{ padding: '16px 24px', background: 'var(--bg-header)', borderTop: '1px solid var(--border-color)' }}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end' }}>
+            <TextArea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  sendMessage(input)
+                }
+              }}
+              placeholder="询问关于 Incident、服务、Pod、指标、日志等问题... (Enter 发送, Shift+Enter 换行)"
+              autoSize={{ minRows: 1, maxRows: 4 }}
+              style={{ flex: 1, borderRadius: 8 }}
+              disabled={loading}
+            />
+            <Button
+              type="primary"
+              icon={<SendOutlined />}
+              onClick={() => sendMessage(input)}
+              loading={loading}
+              style={{ height: 40, borderRadius: 8 }}
+            >
+              发送
+            </Button>
           </div>
-        ) : (
-          messages.map(renderMessage)
-        )}
+          <div style={{ marginTop: 8, textAlign: 'center' }}>
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              AI 仅供参考，所有操作需人工确认。AI 不会自动执行任何生产操作。
+            </Text>
+          </div>
+        </div>
       </div>
 
-      <Card size="small" style={{ borderRadius: 8 }}>
-        <Space.Compact style={{ width: '100%' }}>
-          <TextArea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={incidentId ? `针对 Incident #${incidentId} 提问...` : '输入运维问题，例如：为什么 order-service 最近错误率升高？'}
-            rows={2}
-            onPressEnter={(e) => {
-              if (!e.shiftKey) {
-                e.preventDefault()
-                sendMessage(input)
-              }
-            }}
-            style={{ borderRadius: '6px 0 0 6px' }}
+      {/* 历史对话 Drawer（移动端备用） */}
+      <Drawer
+        title="历史对话"
+        placement="left"
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        width={300}
+      >
+        {conversations.length === 0 ? (
+          <Empty description="暂无对话" />
+        ) : (
+          <List
+            dataSource={conversations}
+            renderItem={(item) => (
+              <List.Item
+                onClick={() => loadConversation(item.id)}
+                style={{ cursor: 'pointer' }}
+                actions={[
+                  <Popconfirm
+                    key="delete"
+                    title="删除此对话？"
+                    onConfirm={() => deleteConversation(item.id)}
+                    okText="删除"
+                    cancelText="取消"
+                  >
+                    <DeleteOutlined />
+                  </Popconfirm>,
+                ]}
+              >
+                <List.Item.Meta
+                  avatar={<Avatar icon={<MessageOutlined />} size="small" />}
+                  title={item.title || '新对话'}
+                  description={`${item.message_count} 条消息`}
+                />
+              </List.Item>
+            )}
           />
-          <Button
-            type="primary"
-            icon={<SendOutlined />}
-            onClick={() => sendMessage(input)}
-            loading={loading}
-            disabled={!input.trim()}
-            style={{ height: '100%', borderRadius: '0 6px 6px 0' }}
+        )}
+      </Drawer>
+
+      {/* AI 配置弹窗 */}
+      <Modal
+        title="AI 配置"
+        open={configModalOpen}
+        onCancel={() => setConfigModalOpen(false)}
+        onOk={handleSaveConfig}
+        confirmLoading={configLoading}
+        okText="保存"
+        cancelText="取消"
+        width={520}
+      >
+        <Alert
+          message="API Key 会加密存储在数据库中，不会明文保存或返回给前端。"
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+        />
+        <Form form={configForm} layout="vertical">
+          <Form.Item
+            name="provider"
+            label="AI 提供商"
+            initialValue="openai"
           >
-            发送
-          </Button>
-        </Space.Compact>
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          Enter 发送，Shift+Enter 换行 | AI 仅执行只读查询，不自动执行任何写操作
-        </Text>
-      </Card>
+            <Input placeholder="openai / azure / ollama / custom" />
+          </Form.Item>
+          <Form.Item
+            name="base_url"
+            label="API 地址"
+            initialValue="https://api.openai.com/v1"
+            rules={[{ required: true, message: '请输入 API 地址' }]}
+          >
+            <Input placeholder="https://api.openai.com/v1" />
+          </Form.Item>
+          <Form.Item
+            name="model"
+            label="模型名称"
+            initialValue="gpt-4o-mini"
+            rules={[{ required: true, message: '请输入模型名称' }]}
+          >
+            <Input placeholder="gpt-4o-mini / gpt-4o / claude-3-5-sonnet" />
+          </Form.Item>
+          <Form.Item
+            name="api_key"
+            label="API Key"
+            extra={aiConfig?.api_key_set ? `当前已配置: ${aiConfig.api_key_masked}（留空则不修改）` : '请输入 API Key（sk-xxxxxxxxxx）'}
+            rules={[
+              { min: 10, message: 'API Key 长度至少 10 位' },
+            ]}
+          >
+            <Input.Password placeholder="sk-xxxxxxxxxxxxxxxxxxxxxxxx" autoComplete="off" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   )
 }

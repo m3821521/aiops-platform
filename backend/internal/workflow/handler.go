@@ -141,3 +141,44 @@ func (h *Handler) Cancel(c *gin.Context) {
 	}
 	response.OK(c, result)
 }
+
+// DryRun 模拟执行工作流，不真正修改任何资源。
+func (h *Handler) DryRun(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	result, err := h.Service.DryRun(c.Request.Context(), id)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.OK(c, result)
+}
+
+// ListExecutions 获取工作流的执行记录列表。
+func (h *Handler) ListExecutions(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	page := 1
+	pageSize := 20
+	if p := c.Query("page"); p != "" {
+		page, _ = strconv.Atoi(p)
+	}
+	if ps := c.Query("page_size"); ps != "" {
+		pageSize, _ = strconv.Atoi(ps)
+	}
+	items, total, err := h.Service.GetExecutions(c.Request.Context(), id, page, pageSize)
+	if err != nil {
+		response.Internal(c, err.Error())
+		return
+	}
+	response.OK(c, gin.H{"items": items, "total": total, "page": page, "page_size": pageSize})
+}
+
+// GetExecution 获取单个工作流执行记录。
+func (h *Handler) GetExecution(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	exec, err := h.Service.GetExecution(c.Request.Context(), id)
+	if err != nil {
+		response.NotFound(c, "工作流执行记录不存在")
+		return
+	}
+	response.OK(c, exec)
+}

@@ -1,9 +1,10 @@
 import { Layout, ConfigProvider, theme as antdTheme, Breadcrumb } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { Outlet, useLocation } from 'react-router-dom'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import Sidebar from '@/components/Sidebar'
 import AppHeader from '@/components/Header'
+import CommandPalette from '@/components/CommandPalette'
 import { useAppStore } from '@/stores/app'
 
 const { Content } = Layout
@@ -75,6 +76,19 @@ const breadcrumbMap: Record<string, string[]> = {
 export default function MainLayout() {
   const themeMode = useAppStore((s) => s.theme)
   const location = useLocation()
+  const [paletteOpen, setPaletteOpen] = useState(false)
+
+  // 全局搜索快捷键 ⌘K / Ctrl+K
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault()
+        setPaletteOpen((v) => !v)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
 
   // 动态浏览器标题
   useEffect(() => {
@@ -126,6 +140,7 @@ export default function MainLayout() {
           </Content>
         </Layout>
       </Layout>
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </ConfigProvider>
   )
 }

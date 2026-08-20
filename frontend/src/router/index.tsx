@@ -1,25 +1,44 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom'
+import { lazy, Suspense } from 'react'
 import MainLayout from '@/layouts/MainLayout'
 import Login from '@/pages/Login'
-import Dashboard from '@/pages/Dashboard'
-import Placeholder from '@/pages/Placeholder'
 import RequireAuth from './RequireAuth'
-import Clusters from '@/pages/Kubernetes/Clusters'
-import Nodes from '@/pages/Kubernetes/Nodes'
-import Namespaces from '@/pages/Kubernetes/Namespaces'
-import Pods from '@/pages/Kubernetes/Pods'
-import Deployments from '@/pages/Kubernetes/Deployments'
-import Services from '@/pages/Kubernetes/Services'
-import AlertRealtime from '@/pages/Alerts/Realtime'
-import MonitoringOverview from '@/pages/Monitoring/Overview'
-import PromQL from '@/pages/Monitoring/PromQL'
-import LogSearch from '@/pages/Logs/Search'
-import AIAssistant from '@/pages/AI/Assistant'
-import AutomationActions from '@/pages/Automation/Actions'
-import Workflows from '@/pages/Automation/Workflows'
-import Incidents from '@/pages/AIOps/Incidents'
-import Anomaly from '@/pages/AIOps/Anomaly'
-import Topology from '@/pages/AIOps/Topology'
+
+// 懒加载大页面（包含 ECharts 等重依赖）
+const Dashboard = lazy(() => import('@/pages/Dashboard'))
+const Clusters = lazy(() => import('@/pages/Kubernetes/Clusters'))
+const Nodes = lazy(() => import('@/pages/Kubernetes/Nodes'))
+const Namespaces = lazy(() => import('@/pages/Kubernetes/Namespaces'))
+const Pods = lazy(() => import('@/pages/Kubernetes/Pods'))
+const Deployments = lazy(() => import('@/pages/Kubernetes/Deployments'))
+const Services = lazy(() => import('@/pages/Kubernetes/Services'))
+const AlertRealtime = lazy(() => import('@/pages/Alerts/Realtime'))
+const MonitoringOverview = lazy(() => import('@/pages/Monitoring/Overview'))
+const PromQL = lazy(() => import('@/pages/Monitoring/PromQL'))
+const LogSearch = lazy(() => import('@/pages/Logs/Search'))
+const AIAssistant = lazy(() => import('@/pages/AI/Assistant'))
+const AutomationActions = lazy(() => import('@/pages/Automation/Actions'))
+const Workflows = lazy(() => import('@/pages/Automation/Workflows'))
+const Incidents = lazy(() => import('@/pages/AIOps/Incidents'))
+const Anomaly = lazy(() => import('@/pages/AIOps/Anomaly'))
+const Topology = lazy(() => import('@/pages/AIOps/Topology'))
+const SystemUsers = lazy(() => import('@/pages/System/Users'))
+const SystemRoles = lazy(() => import('@/pages/System/Roles'))
+const SystemAuditLogs = lazy(() => import('@/pages/System/AuditLogs'))
+const ExternalConnections = lazy(() => import('@/pages/System/ExternalConnections'))
+const AgentOrchestration = lazy(() => import('@/pages/Agent/Orchestration'))
+const Placeholder = lazy(() => import('@/pages/Placeholder'))
+
+// 懒加载页面的 Suspense 包装
+const LazyPage = ({ children }: { children: React.ReactNode }) => (
+  <Suspense fallback={
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh' }}>
+      <div style={{ fontSize: 14, color: 'var(--text-muted)' }}>加载中...</div>
+    </div>
+  }>
+    {children}
+  </Suspense>
+)
 
 export const router = createBrowserRouter([
   {
@@ -34,44 +53,46 @@ export const router = createBrowserRouter([
       </RequireAuth>
     ),
     children: [
-      { index: true, element: <Dashboard /> },
+      { index: true, element: <LazyPage><Dashboard /></LazyPage> },
       // Kubernetes
-      { path: 'kubernetes/clusters', element: <Clusters /> },
-      { path: 'kubernetes/nodes', element: <Nodes /> },
-      { path: 'kubernetes/namespaces', element: <Namespaces /> },
-      { path: 'kubernetes/pods', element: <Pods /> },
-      { path: 'kubernetes/deployments', element: <Deployments /> },
-      { path: 'kubernetes/services', element: <Services /> },
+      { path: 'kubernetes/clusters', element: <LazyPage><Clusters /></LazyPage> },
+      { path: 'kubernetes/nodes', element: <LazyPage><Nodes /></LazyPage> },
+      { path: 'kubernetes/namespaces', element: <LazyPage><Namespaces /></LazyPage> },
+      { path: 'kubernetes/pods', element: <LazyPage><Pods /></LazyPage> },
+      { path: 'kubernetes/deployments', element: <LazyPage><Deployments /></LazyPage> },
+      { path: 'kubernetes/services', element: <LazyPage><Services /></LazyPage> },
       // Monitoring
-      { path: 'monitoring/host', element: <MonitoringOverview /> },
-      { path: 'monitoring/k8s', element: <MonitoringOverview /> },
-      { path: 'monitoring/pod', element: <Placeholder title="Pod 监控" phase="Phase 4" /> },
-      { path: 'monitoring/promql', element: <PromQL /> },
+      { path: 'monitoring/host', element: <LazyPage><MonitoringOverview /></LazyPage> },
+      { path: 'monitoring/k8s', element: <LazyPage><MonitoringOverview /></LazyPage> },
+      { path: 'monitoring/pod', element: <LazyPage><Placeholder title="Pod 监控" phase="Phase 4" /></LazyPage> },
+      { path: 'monitoring/promql', element: <LazyPage><PromQL /></LazyPage> },
       // Alerts
-      { path: 'alerts/realtime', element: <AlertRealtime /> },
-      { path: 'alerts/history', element: <Placeholder title="告警历史" phase="Phase 5" /> },
-      { path: 'alerts/aggregate', element: <Placeholder title="告警聚合" phase="Phase 5" /> },
-      { path: 'alerts/noise', element: <Placeholder title="告警降噪" phase="Phase 5" /> },
+      { path: 'alerts/realtime', element: <LazyPage><AlertRealtime /></LazyPage> },
+      { path: 'alerts/history', element: <LazyPage><Placeholder title="告警历史" phase="Phase 5" /></LazyPage> },
+      { path: 'alerts/aggregate', element: <LazyPage><Placeholder title="告警聚合" phase="Phase 5" /></LazyPage> },
+      { path: 'alerts/noise', element: <LazyPage><Placeholder title="告警降噪" phase="Phase 5" /></LazyPage> },
       // AIOps
-      { path: 'aiops/incidents', element: <Incidents /> },
-      { path: 'aiops/anomaly', element: <Anomaly /> },
-      { path: 'aiops/rca', element: <Placeholder title="根因分析" phase="Phase 7" /> },
-      { path: 'aiops/topology', element: <Topology /> },
+      { path: 'aiops/incidents', element: <LazyPage><Incidents /></LazyPage> },
+      { path: 'aiops/anomaly', element: <LazyPage><Anomaly /></LazyPage> },
+      { path: 'aiops/rca', element: <LazyPage><Placeholder title="根因分析" phase="Phase 7" /></LazyPage> },
+      { path: 'aiops/topology', element: <LazyPage><Topology /></LazyPage> },
       // Logs
-      { path: 'logs/search', element: <LogSearch /> },
-      { path: 'logs/analyze', element: <Placeholder title="日志分析" phase="Phase 6" /> },
+      { path: 'logs/search', element: <LazyPage><LogSearch /></LazyPage> },
+      { path: 'logs/analyze', element: <LazyPage><Placeholder title="日志分析" phase="Phase 6" /></LazyPage> },
       // AI
-      { path: 'ai', element: <AIAssistant /> },
+      { path: 'ai', element: <LazyPage><AIAssistant /></LazyPage> },
       // Automation
-      { path: 'automation/actions', element: <AutomationActions /> },
-      { path: 'automation/workflows', element: <Workflows /> },
-      { path: 'automation/k8s', element: <Placeholder title="Kubernetes 运维" phase="Phase 9" /> },
-      { path: 'automation/jenkins', element: <Placeholder title="Jenkins" phase="Phase 10" /> },
-      { path: 'automation/argocd', element: <Placeholder title="ArgoCD" phase="Phase 10" /> },
+      { path: 'automation/actions', element: <LazyPage><AutomationActions /></LazyPage> },
+      { path: 'automation/workflows', element: <LazyPage><Workflows /></LazyPage> },
+      { path: 'automation/k8s', element: <LazyPage><Placeholder title="Kubernetes 运维" phase="Phase 9" /></LazyPage> },
+      { path: 'automation/jenkins', element: <LazyPage><Placeholder title="Jenkins" phase="Phase 10" /></LazyPage> },
+      { path: 'automation/argocd', element: <LazyPage><Placeholder title="ArgoCD" phase="Phase 10" /></LazyPage> },
       // System
-      { path: 'system/users', element: <Placeholder title="用户管理" phase="Phase 11" /> },
-      { path: 'system/roles', element: <Placeholder title="角色权限" phase="Phase 11" /> },
-      { path: 'system/audit', element: <Placeholder title="审计日志" phase="Phase 11" /> },
+      { path: 'system/users', element: <LazyPage><SystemUsers /></LazyPage> },
+      { path: 'system/roles', element: <LazyPage><SystemRoles /></LazyPage> },
+      { path: 'system/audit', element: <LazyPage><SystemAuditLogs /></LazyPage> },
+      { path: 'system/connections', element: <LazyPage><ExternalConnections /></LazyPage> },
+      { path: 'agent/orchestration', element: <LazyPage><AgentOrchestration /></LazyPage> },
     ],
   },
   { path: '*', element: <Navigate to="/" replace /> },

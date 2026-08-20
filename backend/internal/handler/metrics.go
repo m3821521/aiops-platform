@@ -1,12 +1,16 @@
 package handler
 
 import (
+	"regexp"
 	"time"
 
 	"github.com/aiops/aiops-platform/internal/monitoring"
 	"github.com/aiops/aiops-platform/pkg/response"
 	"github.com/gin-gonic/gin"
 )
+
+// namespaceRe 校验 Kubernetes namespace 格式（DNS-1123 label）。
+var namespaceRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 // MetricsHandler 处理 Prometheus 指标查询。
 type MetricsHandler struct {
@@ -35,7 +39,7 @@ func (h *MetricsHandler) Query(c *gin.Context) {
 
 	result, err := h.Prom.Query(c.Request.Context(), query, ts)
 	if err != nil {
-		response.OK(c, gin.H{"result": []any{}})
+		response.Internal(c, "Prometheus 查询失败: "+err.Error())
 		return
 	}
 	response.OK(c, result)
@@ -71,7 +75,7 @@ func (h *MetricsHandler) QueryRange(c *gin.Context) {
 
 	result, err := h.Prom.QueryRange(c.Request.Context(), query, start, end, step)
 	if err != nil {
-		response.OK(c, gin.H{"result": []any{}})
+		response.Internal(c, "Prometheus 范围查询失败: "+err.Error())
 		return
 	}
 	response.OK(c, result)
@@ -91,7 +95,13 @@ func (h *MetricsHandler) ListNodes(c *gin.Context) {
 // ListPods 处理 GET /api/v1/metrics/pods?namespace=<ns>
 // 返回 Pod 的 CPU 和内存使用量。namespace 可选，不传则查询所有命名空间。
 func (h *MetricsHandler) ListPods(c *gin.Context) {
-	result, err := h.Prom.PodMetrics(c.Request.Context(), c.Query("namespace"))
+	namespace := c.Query("namespace")
+	// 校验 namespace 格式（DNS-1123 label），防止无效输入。
+	if namespace != "" && !namespaceRe.MatchString(namespace) {
+		response.BadRequest(c, "namespace 格式不合法，必须符合 DNS-1123 label 格式（小写字母、数字、连字符，且以字母数字开头和结尾）")
+		return
+	}
+	result, err := h.Prom.PodMetrics(c.Request.Context(), namespace)
 	if err != nil {
 		response.OK(c, []any{})
 		return

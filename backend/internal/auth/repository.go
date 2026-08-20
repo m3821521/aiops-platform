@@ -102,3 +102,31 @@ func (r *Repository) ListRoles(ctx context.Context) ([]Role, error) {
 	err := r.db.WithContext(ctx).Preload("Permissions").Find(&roles).Error
 	return roles, err
 }
+
+// AssignRoles 给用户分配角色（替换现有角色）。
+func (r *Repository) AssignRoles(ctx context.Context, userID int64, roleIDs []int64) error {
+	var user User
+	if err := r.db.WithContext(ctx).First(&user, userID).Error; err != nil {
+		return err
+	}
+
+	var roles []Role
+	if len(roleIDs) > 0 {
+		if err := r.db.WithContext(ctx).Where("id IN ?", roleIDs).Find(&roles).Error; err != nil {
+			return err
+		}
+	}
+
+	// 替换用户的角色关联
+	return r.db.WithContext(ctx).Model(&user).Association("Roles").Replace(&roles)
+}
+
+// GetUserWithRoles 获取用户及其角色。
+func (r *Repository) GetUserWithRoles(ctx context.Context, userID int64) (*User, error) {
+	var user User
+	err := r.db.WithContext(ctx).Preload("Roles").First(&user, userID).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}

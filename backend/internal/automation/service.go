@@ -48,7 +48,17 @@ func NewService(
 }
 
 // CreateAction 创建 Action Proposal。
+// CreateAction 创建 Action Proposal。
+// 只允许支持的 action_type: restart_pod, scale_deployment, jenkins_build, argocd_sync。
+// 其他类型 (observe, investigate, restart, scale, rollback, config_change, network_check)
+// 不属于 Automation，应该走 Investigation / Monitoring 流程。
 func (s *Service) CreateAction(ctx context.Context, action *Action, userID int64) (*Action, error) {
+	// action_type 白名单校验。
+	// 禁止非法类型写入数据库，避免 DryRun/Execute 时才失败。
+	if !IsSupportedActionType(action.ActionType) {
+		return nil, fmt.Errorf("不支持的操作类型: %s，支持的类型: %v", action.ActionType, GetSupportedActionTypes())
+	}
+
 	action.UserID = userID
 	action.Status = StatusPendingApproval
 	if action.Risk == "" {
@@ -201,6 +211,13 @@ func (s *Service) Execute(ctx context.Context, actionID, userID int64) (*Executi
 	} else {
 		exec.Status = "success"
 		if result != nil {
+			// 执行 Verification（如果 Executor 支持）
+			if verifyResult, verifyErr := executor.Verify(ctx, *action, result); verifyErr == nil && verifyResult != nil {
+				// 将 Verification 结果合并到 result 中
+				result.Data = map[string]interface{}{
+					"verification": verifyResult,
+				}
+			}
 			b, _ := json.Marshal(result)
 			exec.ResultJSON = string(b)
 		}

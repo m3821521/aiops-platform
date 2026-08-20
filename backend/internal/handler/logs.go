@@ -19,7 +19,7 @@ type LogsHandler struct {
 // 查询参数：keyword, namespace, pod, container, level, trace_id, request_id, start, end, from, size
 func (h *LogsHandler) Search(c *gin.Context) {
 	if h.ES == nil {
-		response.Internal(c, "Elasticsearch 未配置")
+		response.ServiceUnavailable(c, "Elasticsearch 服务未配置")
 		return
 	}
 
@@ -69,7 +69,7 @@ func (h *LogsHandler) Search(c *gin.Context) {
 
 	result, err := h.ES.Search(c.Request.Context(), q)
 	if err != nil {
-		response.Internal(c, "查询日志失败: "+err.Error())
+		response.ServiceUnavailable(c, "Elasticsearch 服务不可用: "+err.Error())
 		return
 	}
 
@@ -121,7 +121,7 @@ func (h *LogsHandler) Analyze(c *gin.Context) {
 
 	result, err := h.ES.Search(c.Request.Context(), q)
 	if err != nil {
-		response.Internal(c, "查询日志失败: "+err.Error())
+		response.ServiceUnavailable(c, "Elasticsearch 服务不可用: "+err.Error())
 		return
 	}
 

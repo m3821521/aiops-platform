@@ -1,6 +1,8 @@
 package audit
 
 import (
+	"context"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -47,7 +49,19 @@ func Middleware(repo *Repository) gin.HandlerFunc {
 		}
 
 		// 异步记录，不阻塞响应。
-		go repo.Create(c.Request.Context(), log)
+		// 使用 context.Background() 而不是 c.Request.Context()，
+		// 因为请求结束后 context 会被取消，导致异步记录失败。
+		go func() {
+			// 使用独立的 context，避免请求 context 取消影响
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := repo.Create(ctx, log); err != nil {
+				slog.Error("failed to write audit log",
+					"action", log.Action,
+					"resource", log.Resource,
+					"error", err)
+			}
+		}()
 	}
 }
 
@@ -80,5 +94,15 @@ func Record(repo *Repository, c *gin.Context, action, resource, resourceID strin
 		log.UserID = &user.ID
 		log.Username = user.Username
 	}
-	go repo.Create(c.Request.Context(), log)
+	// 使用独立的 context，避免请求 context 取消影响
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := repo.Create(ctx, log); err != nil {
+			slog.Error("failed to write audit log (Record)",
+				"action", log.Action,
+				"resource", log.Resource,
+				"error", err)
+		}
+	}()
 }

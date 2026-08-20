@@ -26,7 +26,7 @@ func (h *Handler) GetGraph(c *gin.Context) {
 
 	graph, err := h.Service.GetGraph(c.Request.Context(), cluster, namespace, refresh)
 	if err != nil {
-		response.Internal(c, err.Error())
+		response.ServiceUnavailable(c, "拓扑服务不可用（Kubernetes 连接失败）: "+err.Error())
 		return
 	}
 	response.OK(c, graph)

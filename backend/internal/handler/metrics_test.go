@@ -244,3 +244,71 @@ func TestMetricsPodsInvalidNamespace(t *testing.T) {
 		t.Fatalf("expected 400, got %d body=%s", w.Code, w.Body.String())
 	}
 }
+
+func TestMetricsPodsEmptyNamespace(t *testing.T) {
+	mock := newMockPrometheus(t, http.StatusOK, vectorResp())
+	defer mock.Close()
+
+	prom, _ := monitoring.NewClient(mock.URL, 5*time.Second)
+	r := newTestRouter(prom)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/pods", nil)
+	r.ServeHTTP(w, req)
+
+	// 空 namespace 应该查询所有命名空间，返回 200。
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for empty namespace, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestMetricsPodsMalformedNamespace(t *testing.T) {
+	prom, _ := monitoring.NewClient("http://127.0.0.1:9090", 5*time.Second)
+	r := newTestRouter(prom)
+
+	cases := []string{
+		"Invalid_Name",
+		"-start-with-dash",
+		"end-with-dash-",
+		"special@char",
+		"UPPERCASE",
+		"has%20space", // URL 编码的空格
+	}
+
+	for _, ns := range cases {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/pods?namespace="+ns, nil)
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for namespace=%q, got %d body=%s", ns, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestMetricsPodsValidNamespace(t *testing.T) {
+	mock := newMockPrometheus(t, http.StatusOK, vectorResp())
+	defer mock.Close()
+
+	prom, _ := monitoring.NewClient(mock.URL, 5*time.Second)
+	r := newTestRouter(prom)
+
+	cases := []string{
+		"default",
+		"kube-system",
+		"production",
+		"ns-123",
+		"a",
+		"abc123",
+	}
+
+	for _, ns := range cases {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/pods?namespace="+ns, nil)
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 for valid namespace=%q, got %d body=%s", ns, w.Code, w.Body.String())
+		}
+	}
+}

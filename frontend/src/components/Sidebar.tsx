@@ -84,12 +84,22 @@ const menuItems = [
     ],
   },
   {
+    key: '/agent',
+    icon: <RobotOutlined />,
+    label: 'AI Agent',
+    children: [
+      { key: '/agent/orchestration', label: '多 Agent 编排' },
+    ],
+  },
+  {
     key: '/system',
     icon: <SettingOutlined />,
     label: '系统管理',
     children: [
       { key: '/system/users', label: '用户管理' },
+      { key: '/system/roles', label: '角色管理' },
       { key: '/system/audit', label: '审计日志' },
+      { key: '/system/connections', label: '外部连接' },
     ],
   },
 ]
@@ -117,8 +127,8 @@ export default function Sidebar() {
         position: 'sticky',
         top: 0,
         left: 0,
-        background: isDark ? '#1e293b' : '#ffffff',
-        borderRight: `1px solid ${isDark ? '#334155' : '#e5e7eb'}`,
+        background: 'var(--bg-sidebar)',
+        borderRight: '1px solid var(--border-sidebar)',
         boxShadow: isDark ? 'none' : '0 1px 3px rgba(0,0,0,0.04)',
       }}
     >
@@ -129,18 +139,18 @@ export default function Sidebar() {
           alignItems: 'center',
           justifyContent: collapsed ? 'center' : 'flex-start',
           paddingLeft: collapsed ? 0 : 20,
-          color: isDark ? '#f1f5f9' : '#111827',
+          color: 'var(--text-primary)',
           fontSize: collapsed ? 14 : 15,
           fontWeight: 700,
-          borderBottom: `1px solid ${isDark ? '#334155' : '#f3f4f6'}`,
+          borderBottom: '1px solid var(--border-light)',
           letterSpacing: -0.2,
         }}
       >
         {collapsed ? (
-          <ApartmentOutlined style={{ fontSize: 20, color: '#2563eb' }} />
+          <ApartmentOutlined style={{ fontSize: 20, color: 'var(--color-primary)' }} />
         ) : (
           <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <ApartmentOutlined style={{ color: '#2563eb', fontSize: 18 }} />
+            <ApartmentOutlined style={{ color: 'var(--color-primary)', fontSize: 18 }} />
             <span>AIOps Platform</span>
           </span>
         )}

@@ -20,8 +20,9 @@ export interface User {
   username: string
   email: string
   full_name: string
-  status: number
+  status: string // active / disabled
   roles: Role[]
+  last_login_at?: string
   created_at: string
   updated_at: string
 }

@@ -16,13 +16,13 @@ type JenkinsHandler struct {
 // ListJobs 处理 GET /api/v1/jenkins/jobs
 func (h *JenkinsHandler) ListJobs(c *gin.Context) {
 	if h.Jenkins == nil {
-		response.Internal(c, "Jenkins 未配置")
+		response.ServiceUnavailable(c, "Jenkins 服务未配置")
 		return
 	}
 
 	jobs, err := h.Jenkins.ListJobs(c.Request.Context())
 	if err != nil {
-		response.Internal(c, "获取 Jenkins Job 列表失败: "+err.Error())
+		response.ServiceUnavailable(c, "Jenkins 服务不可用: "+err.Error())
 		return
 	}
 
@@ -32,14 +32,14 @@ func (h *JenkinsHandler) ListJobs(c *gin.Context) {
 // ListBuilds 处理 GET /api/v1/jenkins/jobs/:name/builds
 func (h *JenkinsHandler) ListBuilds(c *gin.Context) {
 	if h.Jenkins == nil {
-		response.Internal(c, "Jenkins 未配置")
+		response.ServiceUnavailable(c, "Jenkins 服务未配置")
 		return
 	}
 
 	jobName := c.Param("name")
 	builds, err := h.Jenkins.ListBuilds(c.Request.Context(), jobName)
 	if err != nil {
-		response.Internal(c, "获取构建历史失败: "+err.Error())
+		response.ServiceUnavailable(c, "Jenkins 服务不可用: "+err.Error())
 		return
 	}
 
@@ -49,13 +49,13 @@ func (h *JenkinsHandler) ListBuilds(c *gin.Context) {
 // Build 处理 POST /api/v1/jenkins/jobs/:name/build
 func (h *JenkinsHandler) Build(c *gin.Context) {
 	if h.Jenkins == nil {
-		response.Internal(c, "Jenkins 未配置")
+		response.ServiceUnavailable(c, "Jenkins 服务未配置")
 		return
 	}
 
 	jobName := c.Param("name")
 	if err := h.Jenkins.Build(c.Request.Context(), jobName); err != nil {
-		response.Internal(c, "触发构建失败: "+err.Error())
+		response.ServiceUnavailable(c, "Jenkins 服务不可用: "+err.Error())
 		return
 	}
 
@@ -65,7 +65,7 @@ func (h *JenkinsHandler) Build(c *gin.Context) {
 // GetBuildLog 处理 GET /api/v1/jenkins/jobs/:name/builds/:number/log
 func (h *JenkinsHandler) GetBuildLog(c *gin.Context) {
 	if h.Jenkins == nil {
-		response.Internal(c, "Jenkins 未配置")
+		response.ServiceUnavailable(c, "Jenkins 服务未配置")
 		return
 	}
 
@@ -79,7 +79,7 @@ func (h *JenkinsHandler) GetBuildLog(c *gin.Context) {
 
 	log, err := h.Jenkins.GetBuildLog(c.Request.Context(), jobName, number)
 	if err != nil {
-		response.Internal(c, "获取构建日志失败: "+err.Error())
+		response.ServiceUnavailable(c, "Jenkins 服务不可用: "+err.Error())
 		return
 	}
 

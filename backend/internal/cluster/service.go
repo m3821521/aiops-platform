@@ -2,12 +2,14 @@ package cluster
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 	"sigs.k8s.io/yaml"
 )
 
@@ -265,4 +267,122 @@ func (s *Service) ScaleDeployment(ctx context.Context, cluster, namespace, deplo
 	dep.Spec.Replicas = &replicas
 	_, err = client.AppsV1().Deployments(namespace).Update(ctx, dep, metav1.UpdateOptions{})
 	return err
+}
+
+// NodeMetric 节点指标。
+type NodeMetric struct {
+	Name          string `json:"name"`
+	CPUCores      string `json:"cpu_cores"`
+	CPUPercent    float64 `json:"cpu_percent"`
+	MemoryBytes   string `json:"memory_bytes"`
+	MemoryPercent float64 `json:"memory_percent"`
+	Window        string `json:"window"`
+}
+
+// PodMetric Pod 指标。
+type PodMetric struct {
+	Namespace   string `json:"namespace"`
+	Name        string `json:"name"`
+	CPUCores    string `json:"cpu_cores"`
+	MemoryBytes string `json:"memory_bytes"`
+	Window      string `json:"window"`
+}
+
+// GetNodeMetrics 获取所有节点的 CPU 和内存使用率（通过 metrics-server）。
+func (s *Service) GetNodeMetrics(ctx context.Context, cluster string) ([]NodeMetric, error) {
+	client, err := s.mgr.Client(cluster)
+	if err != nil {
+		return nil, err
+	}
+	metricsClient, err := s.mgr.MetricsClient(cluster)
+	if err != nil {
+		return nil, err
+	}
+
+	// 获取节点列表，用于计算 CPU/内存百分比
+	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	nodeCapacity := make(map[string]struct {
+		cpu    int64
+		memory int64
+	})
+	for _, node := range nodes.Items {
+		cpu := node.Status.Capacity.Cpu().MilliValue()
+		memory := node.Status.Capacity.Memory().Value()
+		nodeCapacity[node.Name] = struct {
+			cpu    int64
+			memory int64
+		}{cpu: cpu, memory: memory}
+	}
+
+	// 获取节点指标
+	metrics, err := metricsClient.MetricsV1beta1().NodeMetricses().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	var result []NodeMetric
+	for _, m := range metrics.Items {
+		cpuMilli := m.Usage.Cpu().MilliValue()
+		memoryBytes := m.Usage.Memory().Value()
+		capacity, ok := nodeCapacity[m.Name]
+		var cpuPercent, memoryPercent float64
+		if ok && capacity.cpu > 0 {
+			cpuPercent = float64(cpuMilli) / float64(capacity.cpu) * 100
+		}
+		if ok && capacity.memory > 0 {
+			memoryPercent = float64(memoryBytes) / float64(capacity.memory) * 100
+		}
+		result = append(result, NodeMetric{
+			Name:          m.Name,
+			CPUCores:      m.Usage.Cpu().String(),
+			CPUPercent:    cpuPercent,
+			MemoryBytes:   m.Usage.Memory().String(),
+			MemoryPercent: memoryPercent,
+			Window:        m.Window.String(),
+		})
+	}
+	return result, nil
+}
+
+// GetPodMetrics 获取 Pod 的 CPU 和内存使用量（通过 metrics-server）。
+// namespace 为空时查询所有命名空间。
+func (s *Service) GetPodMetrics(ctx context.Context, cluster, namespace string) ([]PodMetric, error) {
+	metricsClient, err := s.mgr.MetricsClient(cluster)
+	if err != nil {
+		return nil, err
+	}
+
+	var metrics *metricsv1beta1.PodMetricsList
+	if namespace == "" {
+		metrics, err = metricsClient.MetricsV1beta1().PodMetricses("").List(ctx, metav1.ListOptions{})
+	} else {
+		metrics, err = metricsClient.MetricsV1beta1().PodMetricses(namespace).List(ctx, metav1.ListOptions{})
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var result []PodMetric
+	for _, m := range metrics.Items {
+		// 聚合所有容器的 CPU 和内存
+		var cpuTotal, memoryTotal int64
+		for _, container := range m.Containers {
+			cpuTotal += container.Usage.Cpu().MilliValue()
+			memoryTotal += container.Usage.Memory().Value()
+		}
+		// 转换为字符串
+		cpuStr := fmt.Sprintf("%dm", cpuTotal)
+		memoryStr := fmt.Sprintf("%dKi", memoryTotal/1024)
+		result = append(result, PodMetric{
+			Namespace:   m.Namespace,
+			Name:        m.Name,
+			CPUCores:    cpuStr,
+			MemoryBytes: memoryStr,
+			Window:      m.Window.String(),
+		})
+	}
+	return result, nil
 }

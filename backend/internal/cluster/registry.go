@@ -17,6 +17,8 @@ const (
 
 // Cluster 描述一个 Kubernetes 集群怎么连。
 // 密钥只保存文件路径，不把 token / kubeconfig 正文写进仓库。
+// 支持通过 Connection/Credential 直接传入数据（KubeconfigData/TokenData/CAData），
+// 优先使用 Data 字段，其次使用 Path 字段（向后兼容）。
 type Cluster struct {
 	Name           string `yaml:"name"`
 	Enabled        bool   `yaml:"enabled"`
@@ -26,6 +28,10 @@ type Cluster struct {
 	APIServer      string `yaml:"api_server"`
 	TokenFile      string `yaml:"token_file"`
 	CAFile         string `yaml:"ca_file"`
+	// Connection-based 字段（优先使用）
+	KubeconfigData string `yaml:"-"` // kubeconfig 内容（base64 解码后）
+	TokenData      string `yaml:"-"` // token 内容
+	CAData         string `yaml:"-"` // CA 证书内容
 }
 
 type File struct {

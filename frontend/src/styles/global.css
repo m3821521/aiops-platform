@@ -4,12 +4,12 @@
    ============================================================ */
 
 :root {
-  /* === Brand Colors === */
-  --color-primary: #2563eb;
-  --color-primary-hover: #1d4ed8;
-  --color-primary-active: #1e40af;
-  --color-primary-light: #eff6ff;
-  --color-primary-border: #bfdbfe;
+  /* === Brand Colors - 淡蓝色调 === */
+  --color-primary: #3b82f6;
+  --color-primary-hover: #2563eb;
+  --color-primary-active: #1d4ed8;
+  --color-primary-light: #dbeafe;
+  --color-primary-border: #93c5fd;
 
   /* === Status Colors === */
   --color-success: #16a34a;
@@ -23,30 +23,30 @@
   --color-info-light: #ecfeff;
 
   /* === AI / Intelligence === */
-  --color-ai: #7c3aed;
-  --color-ai-light: #f5f3ff;
+  --color-ai: #6366f1;
+  --color-ai-light: #eef2ff;
 
-  /* === Light Theme (Default) === */
-  --bg-app: #f6f8fa;
+  /* === Light Theme - 淡蓝色背景 === */
+  --bg-app: #f0f5ff;
   --bg-surface: #ffffff;
-  --bg-surface-hover: #f8fafc;
-  --bg-surface-active: #f1f5f9;
+  --bg-surface-hover: #f8faff;
+  --bg-surface-active: #eff5ff;
   --bg-elevated: #ffffff;
-  --bg-sidebar: #ffffff;
-  --bg-sidebar-hover: #f1f5f9;
+  --bg-sidebar: #f8faff;
+  --bg-sidebar-hover: #eaf1ff;
   --bg-header: #ffffff;
   --bg-input: #ffffff;
 
-  --text-primary: #111827;
-  --text-secondary: #4b5563;
-  --text-muted: #9ca3af;
+  --text-primary: #1e293b;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
   --text-inverse: #ffffff;
-  --text-sidebar: #374151;
-  --text-sidebar-active: #2563eb;
+  --text-sidebar: #475569;
+  --text-sidebar-active: #3b82f6;
 
-  --border-color: #e5e7eb;
-  --border-light: #f3f4f6;
-  --border-sidebar: #e5e7eb;
+  --border-color: #e2e8f0;
+  --border-light: #f1f5f9;
+  --border-sidebar: #dbeafe;
 
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   --shadow-md: 0 1px 3px 0 rgba(0, 0, 0, 0.08), 0 1px 2px -1px rgba(0, 0, 0, 0.05);

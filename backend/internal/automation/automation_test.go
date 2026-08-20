@@ -343,3 +343,157 @@ func TestExecutionRepository(t *testing.T) {
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && indexOf(s, substr) >= 0
 }
+
+// TestIsSupportedActionType 测试 Automation 支持的操作类型白名单。
+// 只允许 restart_pod, scale_deployment, jenkins_build, argocd_sync。
+// 其他类型 (observe, investigate, restart, scale, rollback, config_change, network_check)
+// 不属于 Automation，应该走 Investigation / Monitoring 流程。
+func TestIsSupportedActionType(t *testing.T) {
+	// 支持的类型
+	supported := []string{
+		ActionRestartPod,      // restart_pod
+		ActionScaleDeployment, // scale_deployment
+		ActionJenkinsBuild,    // jenkins_build
+		ActionArgoCDSync,      // argocd_sync
+	}
+	for _, actionType := range supported {
+		if !IsSupportedActionType(actionType) {
+			t.Errorf("expected %s to be supported", actionType)
+		}
+	}
+
+	// 不支持的类型 (AI Recommendation 的 action_type)
+	unsupported := []string{
+		"observe",
+		"investigate",
+		"restart",
+		"scale",
+		"rollback",
+		"config_change",
+		"network_check",
+		"",
+		"invalid",
+	}
+	for _, actionType := range unsupported {
+		if IsSupportedActionType(actionType) {
+			t.Errorf("expected %s to be unsupported", actionType)
+		}
+	}
+}
+
+// TestGetSupportedActionTypes 测试获取支持的操作类型列表。
+func TestGetSupportedActionTypes(t *testing.T) {
+	types := GetSupportedActionTypes()
+	if len(types) != 4 {
+		t.Errorf("expected 4 supported types, got %d", len(types))
+	}
+	// 验证包含所有 4 种类型
+	typeMap := make(map[string]bool)
+	for _, t := range types {
+		typeMap[t] = true
+	}
+	expected := []string{ActionRestartPod, ActionScaleDeployment, ActionJenkinsBuild, ActionArgoCDSync}
+	for _, e := range expected {
+		if !typeMap[e] {
+			t.Errorf("expected %s in supported types", e)
+		}
+	}
+}
+
+// TestCreateAction_InvalidActionType 测试创建非法 action_type 的 Action。
+// 应该返回错误，不允许写入数据库。
+func TestCreateAction_InvalidActionType(t *testing.T) {
+	db := setupTestDB(t)
+	actionRepo := NewActionRepository(db)
+	execRepo := NewExecutionRepository(db)
+	auditRepo := NewAuditRepository(db)
+	policy := NewPolicyEngine("development")
+
+	service := NewService(actionRepo, execRepo, auditRepo, policy, nil, nil, nil)
+
+	// 测试 investigate 类型
+	investigateAction := &Action{
+		ActionType: "investigate",
+		TargetName: "test-pod",
+		Cluster:    "local",
+		Namespace:  "default",
+	}
+	_, err := service.CreateAction(context.Background(), investigateAction, 1)
+	if err == nil {
+		t.Error("expected error for investigate action_type, got nil")
+	}
+	if !contains(err.Error(), "不支持的操作类型") {
+		t.Errorf("expected error to contain '不支持的操作类型', got: %v", err)
+	}
+
+	// 测试 restart 类型 (短名，应该映射为 restart_pod 才能使用)
+	restartAction := &Action{
+		ActionType: "restart",
+		TargetName: "test-pod",
+		Cluster:    "local",
+		Namespace:  "default",
+	}
+	_, err = service.CreateAction(context.Background(), restartAction, 1)
+	if err == nil {
+		t.Error("expected error for restart action_type, got nil")
+	}
+
+	// 测试 scale 类型 (短名，应该映射为 scale_deployment 才能使用)
+	scaleAction := &Action{
+		ActionType: "scale",
+		TargetName: "test-deployment",
+		Cluster:    "local",
+		Namespace:  "default",
+	}
+	_, err = service.CreateAction(context.Background(), scaleAction, 1)
+	if err == nil {
+		t.Error("expected error for scale action_type, got nil")
+	}
+
+	// 验证数据库中没有创建任何 Action
+	actions, _, err := actionRepo.List(context.Background(), ListFilter{}, 1, 10)
+	if err != nil {
+		t.Fatalf("list failed: %v", err)
+	}
+	if len(actions) != 0 {
+		t.Errorf("expected 0 actions in database, got %d", len(actions))
+	}
+}
+
+// TestCreateAction_ValidActionType 测试创建合法 action_type 的 Action。
+func TestCreateAction_ValidActionType(t *testing.T) {
+	db := setupTestDB(t)
+	actionRepo := NewActionRepository(db)
+	execRepo := NewExecutionRepository(db)
+	auditRepo := NewAuditRepository(db)
+	policy := NewPolicyEngine("development")
+
+	service := NewService(actionRepo, execRepo, auditRepo, policy, nil, nil, nil)
+
+	// 测试 restart_pod 类型
+	validAction := &Action{
+		ActionType: ActionRestartPod,
+		TargetName: "test-pod",
+		Cluster:    "local",
+		Namespace:  "default",
+	}
+	result, err := service.CreateAction(context.Background(), validAction, 1)
+	if err != nil {
+		t.Fatalf("expected success for restart_pod, got error: %v", err)
+	}
+	if result.ActionType != ActionRestartPod {
+		t.Errorf("expected action_type %s, got %s", ActionRestartPod, result.ActionType)
+	}
+	if result.Status != StatusPendingApproval {
+		t.Errorf("expected status %s, got %s", StatusPendingApproval, result.Status)
+	}
+
+	// 验证数据库中创建了 Action
+	actions, _, err := actionRepo.List(context.Background(), ListFilter{}, 1, 10)
+	if err != nil {
+		t.Fatalf("list failed: %v", err)
+	}
+	if len(actions) != 1 {
+		t.Errorf("expected 1 action in database, got %d", len(actions))
+	}
+}

@@ -87,6 +87,11 @@ func (s *Service) SetIncidentSink(sink IncidentSink) {
 	s.incidentSink = sink
 }
 
+// SetQuerier 替换 Prometheus Querier（用于 Provider 迁移）。
+func (s *Service) SetQuerier(querier monitoring.Querier) {
+	s.querier = querier
+}
+
 // Detect 执行异常检测（即时返回，不持久化）。
 // 保留旧 API 兼容性。
 func (s *Service) Detect(ctx context.Context, req DetectRequest) (*DetectResult, error) {

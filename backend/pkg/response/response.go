@@ -63,6 +63,10 @@ func TooManyRequests(c *gin.Context, message string) {
 	Fail(c, http.StatusTooManyRequests, 429, message)
 }
 
+func ServiceUnavailable(c *gin.Context, message string) {
+	Fail(c, http.StatusServiceUnavailable, 503, message)
+}
+
 func Created(c *gin.Context, data interface{}) {
 	c.JSON(http.StatusCreated, Body{Code: 0, Message: "created", Data: data, RequestID: getRequestID(c)})
 }

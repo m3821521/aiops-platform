@@ -28,7 +28,7 @@ func (h *ClusterHandler) ListClusters(c *gin.Context) {
 func (h *ClusterHandler) ListNodes(c *gin.Context) {
 	items, err := h.Service.ListNodes(c.Request.Context(), clusterName(c))
 	if err != nil {
-		response.OK(c, []cluster.NodeView{})
+		response.ServiceUnavailable(c, "Kubernetes 服务不可用: "+err.Error())
 		return
 	}
 	response.OK(c, cluster.ToNodeViews(items))
@@ -37,7 +37,7 @@ func (h *ClusterHandler) ListNodes(c *gin.Context) {
 func (h *ClusterHandler) ListNamespaces(c *gin.Context) {
 	items, err := h.Service.ListNamespaces(c.Request.Context(), clusterName(c))
 	if err != nil {
-		response.OK(c, []cluster.NamespaceView{})
+		response.ServiceUnavailable(c, "Kubernetes 服务不可用: "+err.Error())
 		return
 	}
 	response.OK(c, cluster.ToNamespaceViews(items))
@@ -46,7 +46,7 @@ func (h *ClusterHandler) ListNamespaces(c *gin.Context) {
 func (h *ClusterHandler) ListPods(c *gin.Context) {
 	items, err := h.Service.ListPods(c.Request.Context(), clusterName(c), namespace(c))
 	if err != nil {
-		response.OK(c, []cluster.PodView{})
+		response.ServiceUnavailable(c, "Kubernetes 服务不可用: "+err.Error())
 		return
 	}
 	response.OK(c, cluster.ToPodViews(items))
@@ -55,7 +55,7 @@ func (h *ClusterHandler) ListPods(c *gin.Context) {
 func (h *ClusterHandler) ListDeployments(c *gin.Context) {
 	items, err := h.Service.ListDeployments(c.Request.Context(), clusterName(c), namespace(c))
 	if err != nil {
-		response.Internal(c, err.Error())
+		response.ServiceUnavailable(c, "Kubernetes 服务不可用: "+err.Error())
 		return
 	}
 	response.OK(c, cluster.ToDeploymentViews(items))
@@ -64,7 +64,7 @@ func (h *ClusterHandler) ListDeployments(c *gin.Context) {
 func (h *ClusterHandler) ListStatefulSets(c *gin.Context) {
 	items, err := h.Service.ListStatefulSets(c.Request.Context(), clusterName(c), namespace(c))
 	if err != nil {
-		response.Internal(c, err.Error())
+		response.ServiceUnavailable(c, "Kubernetes 服务不可用: "+err.Error())
 		return
 	}
 	response.OK(c, cluster.ToStatefulSetViews(items))
@@ -73,7 +73,7 @@ func (h *ClusterHandler) ListStatefulSets(c *gin.Context) {
 func (h *ClusterHandler) ListDaemonSets(c *gin.Context) {
 	items, err := h.Service.ListDaemonSets(c.Request.Context(), clusterName(c), namespace(c))
 	if err != nil {
-		response.Internal(c, err.Error())
+		response.ServiceUnavailable(c, "Kubernetes 服务不可用: "+err.Error())
 		return
 	}
 	response.OK(c, cluster.ToDaemonSetViews(items))
@@ -82,7 +82,7 @@ func (h *ClusterHandler) ListDaemonSets(c *gin.Context) {
 func (h *ClusterHandler) ListServices(c *gin.Context) {
 	items, err := h.Service.ListServices(c.Request.Context(), clusterName(c), namespace(c))
 	if err != nil {
-		response.Internal(c, err.Error())
+		response.ServiceUnavailable(c, "Kubernetes 服务不可用: "+err.Error())
 		return
 	}
 	response.OK(c, cluster.ToServiceViews(items))
@@ -91,7 +91,7 @@ func (h *ClusterHandler) ListServices(c *gin.Context) {
 func (h *ClusterHandler) ListConfigMaps(c *gin.Context) {
 	items, err := h.Service.ListConfigMaps(c.Request.Context(), clusterName(c), namespace(c))
 	if err != nil {
-		response.Internal(c, err.Error())
+		response.ServiceUnavailable(c, "Kubernetes 服务不可用: "+err.Error())
 		return
 	}
 	response.OK(c, cluster.ToConfigMapViews(items))
@@ -100,7 +100,7 @@ func (h *ClusterHandler) ListConfigMaps(c *gin.Context) {
 func (h *ClusterHandler) ListSecrets(c *gin.Context) {
 	items, err := h.Service.ListSecrets(c.Request.Context(), clusterName(c), namespace(c))
 	if err != nil {
-		response.Internal(c, err.Error())
+		response.ServiceUnavailable(c, "Kubernetes 服务不可用: "+err.Error())
 		return
 	}
 	response.OK(c, cluster.ToSecretViews(items))
@@ -141,4 +141,24 @@ func (h *ClusterHandler) GetDeployment(c *gin.Context) {
 	}
 	view := cluster.ToDeploymentViews([]appsv1.Deployment{*dep})[0]
 	response.OK(c, view)
+}
+
+// GetNodeMetrics 获取节点 CPU/内存指标（通过 metrics-server）
+func (h *ClusterHandler) GetNodeMetrics(c *gin.Context) {
+	metrics, err := h.Service.GetNodeMetrics(c.Request.Context(), clusterName(c))
+	if err != nil {
+		response.ServiceUnavailable(c, "获取节点指标失败: "+err.Error())
+		return
+	}
+	response.OK(c, metrics)
+}
+
+// GetPodMetrics 获取 Pod CPU/内存指标（通过 metrics-server）
+func (h *ClusterHandler) GetPodMetrics(c *gin.Context) {
+	metrics, err := h.Service.GetPodMetrics(c.Request.Context(), clusterName(c), namespace(c))
+	if err != nil {
+		response.ServiceUnavailable(c, "获取 Pod 指标失败: "+err.Error())
+		return
+	}
+	response.OK(c, metrics)
 }

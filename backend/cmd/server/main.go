@@ -12,6 +12,7 @@ import (
 
 	"github.com/aiops/aiops-platform/internal/ai"
 	"github.com/aiops/aiops-platform/internal/ai/tools"
+	"github.com/aiops/aiops-platform/internal/agent"
 	"github.com/aiops/aiops-platform/internal/alert"
 	"github.com/aiops/aiops-platform/internal/anomaly"
 	"github.com/aiops/aiops-platform/internal/api"
@@ -20,14 +21,17 @@ import (
 	"github.com/aiops/aiops-platform/internal/automation"
 	"github.com/aiops/aiops-platform/internal/cluster"
 	"github.com/aiops/aiops-platform/internal/config"
+	"github.com/aiops/aiops-platform/internal/connection"
 	"github.com/aiops/aiops-platform/internal/handler"
 	"github.com/aiops/aiops-platform/internal/infra"
 	"github.com/aiops/aiops-platform/internal/incident"
 	"github.com/aiops/aiops-platform/internal/logging"
 	"github.com/aiops/aiops-platform/internal/migration"
 	"github.com/aiops/aiops-platform/internal/monitoring"
+	"github.com/aiops/aiops-platform/internal/providers"
 	"github.com/aiops/aiops-platform/internal/rca"
 	"github.com/aiops/aiops-platform/internal/redisutil"
+	"github.com/aiops/aiops-platform/internal/secret"
 	"github.com/aiops/aiops-platform/internal/topology"
 	"github.com/aiops/aiops-platform/internal/workflow"
 	"github.com/aiops/aiops-platform/pkg/logger"
@@ -92,7 +96,7 @@ func main() {
 
 	// 数据库迁移（开发环境使用 AutoMigrate，未来替换为 versioned migration）。
 	migrator := migration.NewGormMigrator(db)
-	if err := migrator.Migrate(&incident.Incident{}, &incident.IncidentSignal{}, &anomaly.AnomalyRecord{}, &rca.IncidentAnalysis{}, &ai.AIAnalysisRecord{}, &tools.ToolAuditRecord{}, &automation.Action{}, &automation.ActionExecution{}, &automation.AutomationAudit{}, &workflow.Workflow{}, &workflow.WorkflowStep{}); err != nil {
+	if err := migrator.Migrate(&incident.Incident{}, &incident.IncidentSignal{}, &anomaly.AnomalyRecord{}, &rca.IncidentAnalysis{}, &ai.AIAnalysisRecord{}, &ai.Conversation{}, &ai.ConversationMessage{}, &ai.AIConfig{}, &tools.ToolAuditRecord{}, &automation.Action{}, &automation.ActionExecution{}, &automation.AutomationAudit{}, &workflow.Workflow{}, &workflow.WorkflowStep{}, &workflow.WorkflowExecution{}, &workflow.WorkflowStepExecution{}, &connection.Connection{}, &connection.Credential{}); err != nil {
 		slog.Warn("migration failed", "err", err)
 	}
 
@@ -125,18 +129,189 @@ func main() {
 	// AI 助手（可选）。
 	var aiAssistant *ai.Assistant
 	var aiProvider ai.Provider
+	var openAIProvider *ai.OpenAIProvider
 	if cfg.AI.Enabled {
-		aiProvider = ai.NewOpenAIProvider(cfg.AI.BaseURL, cfg.AI.APIKey, cfg.AI.Model, cfg.AI.Timeout)
+		openAIProvider = ai.NewOpenAIProvider(cfg.AI.BaseURL, cfg.AI.APIKey, cfg.AI.Model, cfg.AI.Timeout)
+		aiProvider = openAIProvider
 		aiAssistant = ai.NewAssistant(aiProvider, alertRepo)
 		slog.Info("AI assistant enabled", "provider", cfg.AI.Provider, "model", cfg.AI.Model)
 	} else {
 		slog.Info("AI assistant disabled")
 	}
 
+	// AI 配置存储（加密存储 API Key，支持前端配置）
+	aiConfigSecret := cfg.Auth.JWTSecret
+	if len(aiConfigSecret) < 32 {
+		aiConfigSecret = "aiops-platform-ai-config-secret-key-32bytes"
+	}
+	aiConfigRepo := ai.NewAIConfigRepository(db, aiConfigSecret)
+	// 从数据库加载已配置的 AI 配置（覆盖配置文件中的默认值）
+	if openAIProvider != nil {
+		if dbCfg, err := aiConfigRepo.Get(context.Background()); err == nil && dbCfg != nil {
+			if dbCfg.BaseURL != "" {
+				openAIProvider.SetBaseURL(dbCfg.BaseURL)
+			}
+			if dbCfg.Model != "" {
+				openAIProvider.SetModel(dbCfg.Model)
+			}
+			if dbAPIKey, err := aiConfigRepo.GetAPIKey(context.Background()); err == nil && dbAPIKey != "" {
+				openAIProvider.SetAPIKey(dbAPIKey)
+			}
+			slog.Info("AI config loaded from database", "provider", dbCfg.Provider, "model", dbCfg.Model, "base_url", dbCfg.BaseURL)
+		}
+	}
+	aiConfigHandler := &handler.AIConfigHandler{
+		Repo:     aiConfigRepo,
+		Provider: openAIProvider,
+	}
+
+	// P5-0 Connection & Credential Manager
+	// Secret Provider：使用 AES-256-GCM 加密存储敏感信息
+	secretProvider, err := secret.NewLocalEncryptedSecretProvider(aiConfigSecret)
+	if err != nil {
+		slog.Error("failed to create secret provider", "error", err)
+	} else {
+		if err := secretProvider.Validate(context.Background()); err != nil {
+			slog.Error("secret provider validation failed", "error", err)
+		} else {
+			slog.Info("secret provider initialized", "type", secretProvider.Type())
+		}
+	}
+
+	// Connection & Credential Repository
+	connectionRepo := connection.NewConnectionRepository(db)
+	credentialRepo := connection.NewCredentialRepository(db)
+
+	// Connection & Credential Service
+	credentialService := connection.NewCredentialService(credentialRepo, secretProvider)
+	connectionService := connection.NewConnectionService(connectionRepo, credentialService)
+
+	// Legacy Config Compatibility Adapter（将旧 config.yaml 映射为 Connection）
+	legacyAdapter := connection.NewLegacyConfigAdapter()
+	legacyAdapter.Load(cfg)
+	slog.Info("legacy config adapter loaded", "connections", legacyAdapter.Count())
+
+	// Connection Manager（整合数据库 Connection 和 Legacy Config）
+	connectionManager := connection.NewConnectionManager(connectionService, legacyAdapter)
+
+	// Provider Registry（Phase A 只注册基础结构，具体 Provider 在 Phase B-F 中逐步迁移）
+	providerRegistry := connection.NewProviderRegistry()
+
+	// 注册 P5-B Provider Adapters
+	k8sProvider := providers.NewKubernetesProvider(credentialService)
+	promProvider := providers.NewPrometheusProvider(credentialService)
+	esProvider := providers.NewElasticsearchProvider(credentialService)
+	jenkinsProvider := providers.NewJenkinsProvider(credentialService)
+	argocdProvider := providers.NewArgoCDProvider(credentialService)
+	mysqlProvider := providers.NewMySQLProvider(credentialService)
+	redisProvider := providers.NewRedisProvider(credentialService)
+	grafanaProvider := providers.NewGrafanaProvider(credentialService)
+
+	if err := providerRegistry.Register(k8sProvider); err != nil {
+		slog.Error("failed to register kubernetes provider", "error", err)
+	}
+	if err := providerRegistry.Register(promProvider); err != nil {
+		slog.Error("failed to register prometheus provider", "error", err)
+	}
+	if err := providerRegistry.Register(esProvider); err != nil {
+		slog.Error("failed to register elasticsearch provider", "error", err)
+	}
+	if err := providerRegistry.Register(jenkinsProvider); err != nil {
+		slog.Error("failed to register jenkins provider", "error", err)
+	}
+	if err := providerRegistry.Register(argocdProvider); err != nil {
+		slog.Error("failed to register argocd provider", "error", err)
+	}
+	if err := providerRegistry.Register(mysqlProvider); err != nil {
+		slog.Error("failed to register mysql provider", "error", err)
+	}
+	if err := providerRegistry.Register(redisProvider); err != nil {
+		slog.Error("failed to register redis provider", "error", err)
+	}
+	if err := providerRegistry.Register(grafanaProvider); err != nil {
+		slog.Error("failed to register grafana provider", "error", err)
+	}
+
+	slog.Info("provider registry initialized", "registered_types", providerRegistry.List())
+
+	// P5-C Provider Factory：从 Connection/Credential 创建业务 Client
+	// 优先使用 Connection-based 配置，其次使用 Legacy config.yaml
+	providerFactory := providers.NewFactory(connectionManager, credentialService, &providers.LegacyConfig{
+		ClusterConfigPath: cfg.Cluster.ConfigPath,
+		Prometheus: providers.PrometheusLegacyConfig{
+			Address: cfg.Prometheus.Address,
+			Timeout: time.Duration(cfg.Prometheus.Timeout) * time.Second,
+		},
+		Elasticsearch: providers.ElasticsearchLegacyConfig{
+			Address:  cfg.Elasticsearch.Address,
+			Index:    cfg.Elasticsearch.Index,
+			Username: cfg.Elasticsearch.Username,
+			Password: cfg.Elasticsearch.Password,
+			Timeout:  cfg.Elasticsearch.Timeout,
+		},
+		Jenkins: providers.JenkinsLegacyConfig{
+			URL:      cfg.Jenkins.URL,
+			Username: cfg.Jenkins.Username,
+			Token:    cfg.Jenkins.Token,
+			Timeout:  cfg.Jenkins.Timeout,
+		},
+		ArgoCD: providers.ArgoCDLegacyConfig{
+			URL:     cfg.ArgoCD.URL,
+			Token:   cfg.ArgoCD.Token,
+			Timeout: cfg.ArgoCD.Timeout,
+		},
+	})
+
+	// P5-C2: Prometheus Provider 迁移
+	// 优先使用 Connection-based 配置创建 Querier，如果失败则保持 Legacy 配置
+	if connQuerier, err := providerFactory.BuildPrometheusQuerier(context.Background(), rdb); err == nil && connQuerier != nil {
+		querier = connQuerier
+		if metricsHandler != nil {
+			metricsHandler.Prom = querier
+		}
+		if anomalyService != nil {
+			anomalyService.SetQuerier(querier)
+		}
+		slog.Info("prometheus querier migrated to provider factory")
+	}
+
+	// P5-C3: Elasticsearch Provider 迁移
+	if connESClient, err := providerFactory.BuildElasticsearchClient(context.Background()); err == nil && connESClient != nil {
+		esClient = connESClient
+		slog.Info("elasticsearch client migrated to provider factory")
+	}
+
+	// P5-D: Kubernetes Provider 迁移
+	// 优先使用 Connection-based 配置更新 cluster.Manager
+	// 如果数据库中存在有效的 Kubernetes Connection，则使用 Connection 配置
+	// 如果不存在，则保持 Legacy config.yaml 配置（向后兼容）
+	if connClusters, err := providerFactory.BuildKubernetesClusters(context.Background()); err == nil && len(connClusters) > 0 {
+		mgr.SetClusters(connClusters)
+		slog.Info("kubernetes cluster manager migrated to provider factory", "clusters", len(connClusters))
+	} else {
+		slog.Info("kubernetes cluster manager using legacy config", "clusters", len(mgr.List()))
+	}
+
+	// Connection Handler
+	connectionHandler := connection.NewHandler(connectionService, credentialService, connectionManager, providerRegistry)
+	slog.Info("connection & credential manager initialized")
+
 	clusterSvc := cluster.NewService(mgr)
 	automationEngine := automation.NewEngine(clusterSvc)
+
+	// P5-C4: Jenkins Provider 迁移
 	jenkinsClient := automation.NewJenkinsClient(cfg.Jenkins.URL, cfg.Jenkins.Username, cfg.Jenkins.Token, cfg.Jenkins.Timeout)
+	if connJenkinsClient, err := providerFactory.BuildJenkinsClient(context.Background()); err == nil && connJenkinsClient != nil {
+		jenkinsClient = connJenkinsClient
+		slog.Info("jenkins client migrated to provider factory")
+	}
+
+	// P5-C5: ArgoCD Provider 迁移
 	argocdClient := automation.NewArgoCDClient(cfg.ArgoCD.URL, cfg.ArgoCD.Token, cfg.ArgoCD.Timeout)
+	if connArgoCDClient, err := providerFactory.BuildArgoCDClient(context.Background()); err == nil && connArgoCDClient != nil {
+		argocdClient = connArgoCDClient
+		slog.Info("argocd client migrated to provider factory")
+	}
 
 	// Automation Action Framework（审批+执行+审计）。
 	actionRepo := automation.NewActionRepository(db)
@@ -181,6 +356,7 @@ func main() {
 	// Workflow 编排引擎。
 	workflowRepo := workflow.NewRepository(db)
 	workflowService := workflow.NewService(workflowRepo, &workflowActionAdapter{automationSvc: automationService})
+	workflowService.SetK8sQuerier(clusterSvc)
 	workflowHandler := &workflow.Handler{Service: workflowService}
 	slog.Info("workflow engine initialized")
 
@@ -228,6 +404,8 @@ func main() {
 	// AI Tool Calling Engine（只读工具，依赖 RCA/Topology/Cluster 等服务）。
 	var toolEngine *tools.Engine
 	var toolAuditRepo *tools.ToolAuditRepository
+	var convRepo *ai.ConversationRepository
+	var convHandler *ai.ConversationHandler
 	if cfg.AI.Enabled && aiProvider != nil {
 		toolRegistry := tools.NewRegistry()
 		_ = toolRegistry.Register(tools.NewGetIncidentTool(incidentRepo))
@@ -241,6 +419,8 @@ func main() {
 		_ = toolRegistry.Register(tools.NewGetTopologyTool(topologyService))
 		toolEngine = tools.NewEngine(aiProvider, toolRegistry, tools.DefaultEngineConfig())
 		toolAuditRepo = tools.NewToolAuditRepository(db)
+		convRepo = ai.NewConversationRepository(db)
+		convHandler = ai.NewConversationHandler(convRepo)
 		slog.Info("ai tool calling engine initialized", "tools", len(toolRegistry.List()))
 	}
 
@@ -250,6 +430,30 @@ func main() {
 	auditRepo := audit.NewRepository(db)
 	rateLimiter := redisutil.NewRateLimiter(rdb, 100, time.Minute)
 
+	// 检查数据库中是否已配置 API Key
+	dbAPIKeyConfigured := false
+	if openAIProvider != nil {
+		if k, err := aiConfigRepo.GetAPIKey(context.Background()); err == nil && k != "" {
+			dbAPIKeyConfigured = true
+		}
+	}
+	aiHandler := &handler.AIHandler{Assistant: aiAssistant, Engine: toolEngine, AuditRepo: toolAuditRepo, ConversationHdl: convHandler, Enabled: cfg.AI.Enabled, APIKeyConfigured: cfg.AI.APIKey != "" || dbAPIKeyConfigured}
+	// 设置配置更新回调：前端更新 API Key 后，通知 AIHandler 重新加载状态
+	aiConfigHandler.OnUpdate = func() {
+		if configured, err := aiConfigRepo.IsConfigured(context.Background()); err == nil {
+			aiHandler.UpdateAPIKeyStatus(configured)
+		}
+	}
+
+	// Multi-Agent Orchestration 初始化
+	agentRegistry := agent.NewRegistry()
+	if err := agent.RegisterBuiltinAgents(agentRegistry); err != nil {
+		slog.Error("failed to register builtin agents", "error", err)
+	}
+	agentOrchestrator := agent.NewOrchestrator(agentRegistry)
+	agentHandler := agent.NewHandler(agentOrchestrator, agentRegistry)
+	slog.Info("multi-agent orchestration initialized", "agents", len(agentRegistry.GetAll()))
+
 	router := api.NewRouter(cfg.Server.Mode, api.Deps{
 		Health:     &handler.HealthHandler{DB: db, Redis: rdb},
 		Cluster:    &handler.ClusterHandler{Service: clusterSvc},
@@ -258,7 +462,12 @@ func main() {
 		Anomaly:    anomalyHandler,
 		RCA:        &handler.RCAHandler{AlertRepo: alertRepo, Engine: rcaEngine},
 		Logs:       &handler.LogsHandler{ES: esClient, Analyzer: logAnalyzer},
-		AI: &handler.AIHandler{Assistant: aiAssistant, Engine: toolEngine, AuditRepo: toolAuditRepo, Enabled: cfg.AI.Enabled},
+		AI:         aiHandler,
+		AIConfig:   aiConfigHandler,
+		AIConversation: convHandler,
+		Agent:      agentHandler,
+		Connection: connectionHandler,
+		Search: &handler.SearchHandler{IncidentRepo: incidentRepo, AlertRepo: alertRepo, ClusterSvc: clusterSvc},
 		Automation: &handler.AutomationHandler{Engine: automationEngine},
 		AutomationAction: automationActionHandler,
 		Workflow:        workflowHandler,
