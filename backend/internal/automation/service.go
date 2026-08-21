@@ -248,13 +248,21 @@ func (s *Service) Execute(ctx context.Context, actionID, userID int64) (*Executi
 		return nil, err
 	}
 
-	// 更新 Action 状态为 running，并设置初始 lease。
-	now := time.Now()
-	action.Status = StatusRunning
-	action.UpdatedAt = now
-	leaseExpires := now.Add(leaseTimeout)
-	action.LeaseExpiresAt = &leaseExpires
-	s.actions.Update(ctx, action)
+	// P0-05: 原子 Claim，防止 TOCTOU 竞态导致重复执行。
+	// 使用 CAS (WHERE status='approved') 确保只有一个请求能成功声明执行权。
+	claimed, err := s.actions.ClaimForExecution(ctx, actionID, leaseTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("claim action for execution failed: %w", err)
+	}
+	if !claimed {
+		return nil, fmt.Errorf("Action 已被其他请求声明执行或状态已变更，无法重复执行")
+	}
+
+	// Claim 成功后重新读取 action，获取更新后的状态和 lease。
+	action, err = s.actions.FindByID(ctx, actionID)
+	if err != nil {
+		return nil, fmt.Errorf("reload action after claim failed: %w", err)
+	}
 
 	// 启动 heartbeat goroutine，定期刷新 lease。
 	// 使用独立 context，heartbeat 失败时取消执行 context，阻止 executor 继续执行。

@@ -78,8 +78,27 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 	})
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, ginSwagger.URL("/swagger.json")))
 
+	// P0-01: 公开端点（不需要认证）。
+	// 必须在认证 v1 group 之前注册，避免被 AuthMiddleware 拦截。
+	publicV1 := r.Group("/api/v1")
+	{
+		// 登录接口公开。
+		if deps.Auth != nil {
+			publicV1.POST("/auth/login", deps.Auth.Login)
+		}
+		// Alertmanager Webhook 公开（通过 shared secret 验证，由 handler 内部处理）。
+		if deps.Alert != nil {
+			publicV1.POST("/alerts/webhook", deps.Alert.ReceiveWebhook)
+		}
+	}
+
 	v1 := r.Group("/api/v1")
 	{
+		// P0-01: 统一认证中间件。所有 /api/v1 端点（除上述公开端点）都必须认证。
+		if deps.AuthService != nil {
+			v1.Use(auth.AuthMiddleware(deps.AuthService))
+		}
+
 		// 请求体大小限制：防止恶意大请求导致内存耗尽。
 		v1.Use(func(c *gin.Context) {
 			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodySize)
@@ -120,13 +139,13 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 		}
 
 		if deps.Alert != nil {
-			v1.POST("/alerts/webhook", deps.Alert.ReceiveWebhook)
+			// P0-01: webhook 已在 publicV1 注册，此处不重复注册。
 			v1.GET("/alerts", deps.Alert.List)
 			v1.GET("/alerts/aggregate", deps.Alert.Aggregate)
 			v1.GET("/alerts/noise", deps.Alert.Reduce)
 			v1.GET("/alerts/:id", deps.Alert.Get)
-			v1.POST("/alerts/:id/acknowledge", deps.Alert.Acknowledge)
-			v1.POST("/alerts/:id/resolve", deps.Alert.Resolve)
+			v1.POST("/alerts/:id/acknowledge", auth.RequirePermission("alerts", "write"), deps.Alert.Acknowledge)
+			v1.POST("/alerts/:id/resolve", auth.RequirePermission("alerts", "write"), deps.Alert.Resolve)
 		}
 
 		if deps.Anomaly != nil {
@@ -151,8 +170,8 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 		}
 
 		if deps.AIConfig != nil {
-			v1.GET("/ai/config", deps.AIConfig.GetConfig)
-			v1.POST("/ai/config", deps.AIConfig.UpdateConfig)
+			v1.GET("/ai/config", auth.RequirePermission("ai", "read"), deps.AIConfig.GetConfig)
+			v1.POST("/ai/config", auth.RequirePermission("ai", "write"), deps.AIConfig.UpdateConfig)
 		}
 
 		if deps.AIConversation != nil {
@@ -176,19 +195,19 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 			v1.GET("/connections", deps.Connection.ListConnections)
 			v1.GET("/connections/types", deps.Connection.ListConnectionTypes)
 			v1.GET("/connections/:id", deps.Connection.GetConnection)
-			v1.POST("/connections", deps.Connection.CreateConnection)
-			v1.PUT("/connections/:id", deps.Connection.UpdateConnection)
-			v1.DELETE("/connections/:id", deps.Connection.DeleteConnection)
-			v1.POST("/connections/:id/enable", deps.Connection.EnableConnection)
-			v1.POST("/connections/:id/disable", deps.Connection.DisableConnection)
-			v1.POST("/connections/:id/test", deps.Connection.TestConnection)
+			v1.POST("/connections", auth.RequirePermission("connection", "write"), deps.Connection.CreateConnection)
+			v1.PUT("/connections/:id", auth.RequirePermission("connection", "write"), deps.Connection.UpdateConnection)
+			v1.DELETE("/connections/:id", auth.RequirePermission("connection", "write"), deps.Connection.DeleteConnection)
+			v1.POST("/connections/:id/enable", auth.RequirePermission("connection", "write"), deps.Connection.EnableConnection)
+			v1.POST("/connections/:id/disable", auth.RequirePermission("connection", "write"), deps.Connection.DisableConnection)
+			v1.POST("/connections/:id/test", auth.RequirePermission("connection", "write"), deps.Connection.TestConnection)
 
 			// Credential CRUD
 			v1.GET("/credentials", deps.Connection.ListCredentials)
 			v1.GET("/credentials/:id", deps.Connection.GetCredential)
-			v1.POST("/credentials", deps.Connection.CreateCredential)
-			v1.PUT("/credentials/:id", deps.Connection.UpdateCredential)
-			v1.DELETE("/credentials/:id", deps.Connection.DeleteCredential)
+			v1.POST("/credentials", auth.RequirePermission("credential", "write"), deps.Connection.CreateCredential)
+			v1.PUT("/credentials/:id", auth.RequirePermission("credential", "write"), deps.Connection.UpdateCredential)
+			v1.DELETE("/credentials/:id", auth.RequirePermission("credential", "write"), deps.Connection.DeleteCredential)
 		}
 
 		if deps.Search != nil {
@@ -196,101 +215,87 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 		}
 
 		if deps.Automation != nil {
-			// 只读操作：不需要权限控制
+			// 只读操作：不需要权限控制（但需要认证，v1 已统一）
 			v1.GET("/automation/pods/:pod/logs", deps.Automation.GetPodLogs)
 			v1.GET("/automation/pods/:pod/events", deps.Automation.GetPodEvents)
 
-			// 危险操作：必须认证 + 权限控制
-			k8sOpGroup := v1.Group("")
-			if deps.AuthService != nil {
-				k8sOpGroup.Use(auth.AuthMiddleware(deps.AuthService))
-			}
-			k8sOpGroup.POST("/automation/pods/:pod/restart", auth.RequirePermission("cluster", "write"), deps.Automation.RestartPod)
-			k8sOpGroup.POST("/automation/pods/:pod/exec", auth.RequirePermission("cluster", "write"), deps.Automation.ExecPod)
-			k8sOpGroup.POST("/automation/deployments/:name/scale", auth.RequirePermission("cluster", "write"), deps.Automation.ScaleDeployment)
+			// P0-01: 危险操作必须认证 + 权限控制（v1 已统一 AuthMiddleware）
+			v1.POST("/automation/pods/:pod/restart", auth.RequirePermission("cluster", "write"), deps.Automation.RestartPod)
+			v1.POST("/automation/pods/:pod/exec", auth.RequirePermission("cluster", "write"), deps.Automation.ExecPod)
+			v1.POST("/automation/deployments/:name/scale", auth.RequirePermission("cluster", "write"), deps.Automation.ScaleDeployment)
 		}
 
 		if deps.AutomationAction != nil {
-			authGroup := v1.Group("")
-			if deps.AuthService != nil {
-				authGroup.Use(auth.AuthMiddleware(deps.AuthService))
-			}
-			authGroup.POST("/actions", auth.RequirePermission("automation", "create"), deps.AutomationAction.Create)
-			authGroup.GET("/actions", deps.AutomationAction.List)
-			authGroup.GET("/actions/pending-approval", deps.AutomationAction.PendingApproval)
-			authGroup.GET("/actions/:id", deps.AutomationAction.Get)
-			authGroup.POST("/actions/:id/approve", auth.RequirePermission("automation", "approve"), deps.AutomationAction.Approve)
-			authGroup.POST("/actions/:id/reject", auth.RequirePermission("automation", "approve"), deps.AutomationAction.Reject)
-			authGroup.POST("/actions/:id/dry-run", deps.AutomationAction.DryRun)
-			authGroup.POST("/actions/:id/execute", auth.RequirePermission("automation", "execute"), deps.AutomationAction.Execute)
-			authGroup.POST("/actions/:id/cancel", auth.RequirePermission("automation", "cancel"), deps.AutomationAction.Cancel)
-			authGroup.GET("/actions/:id/executions", deps.AutomationAction.Executions)
-			authGroup.GET("/automation/audit", auth.RequirePermission("automation", "audit"), deps.AutomationAction.Audit)
+			// P0-01: v1 已统一 AuthMiddleware，此处直接注册端点。
+			v1.POST("/actions", auth.RequirePermission("automation", "create"), deps.AutomationAction.Create)
+			v1.GET("/actions", deps.AutomationAction.List)
+			v1.GET("/actions/pending-approval", deps.AutomationAction.PendingApproval)
+			v1.GET("/actions/:id", deps.AutomationAction.Get)
+			v1.POST("/actions/:id/approve", auth.RequirePermission("automation", "approve"), deps.AutomationAction.Approve)
+			v1.POST("/actions/:id/reject", auth.RequirePermission("automation", "approve"), deps.AutomationAction.Reject)
+			v1.POST("/actions/:id/dry-run", deps.AutomationAction.DryRun)
+			v1.POST("/actions/:id/execute", auth.RequirePermission("automation", "execute"), deps.AutomationAction.Execute)
+			v1.POST("/actions/:id/cancel", auth.RequirePermission("automation", "cancel"), deps.AutomationAction.Cancel)
+			v1.GET("/actions/:id/executions", deps.AutomationAction.Executions)
+			v1.GET("/automation/audit", auth.RequirePermission("automation", "audit"), deps.AutomationAction.Audit)
 		}
 
 		if deps.Workflow != nil {
-			wfGroup := v1.Group("")
-			if deps.AuthService != nil {
-				wfGroup.Use(auth.AuthMiddleware(deps.AuthService))
-			}
-			wfGroup.POST("/workflows", deps.Workflow.Create)
-			wfGroup.GET("/workflows", deps.Workflow.List)
-			wfGroup.GET("/workflows/:id", deps.Workflow.Get)
-			wfGroup.POST("/workflows/:id/submit", deps.Workflow.Submit)
-			wfGroup.POST("/workflows/:id/approve", auth.RequirePermission("automation", "approve"), deps.Workflow.Approve)
-			wfGroup.POST("/workflows/:id/execute", auth.RequirePermission("automation", "execute"), deps.Workflow.Execute)
-			wfGroup.POST("/workflows/:id/cancel", deps.Workflow.Cancel)
-			wfGroup.POST("/workflows/:id/dry-run", deps.Workflow.DryRun)
-			wfGroup.GET("/workflows/:id/executions", deps.Workflow.ListExecutions)
-			wfGroup.GET("/workflow-executions/:id", deps.Workflow.GetExecution)
+			// P0-01: v1 已统一 AuthMiddleware，此处直接注册端点并添加权限控制。
+			v1.POST("/workflows", auth.RequirePermission("automation", "create"), deps.Workflow.Create)
+			v1.GET("/workflows", deps.Workflow.List)
+			v1.GET("/workflows/:id", deps.Workflow.Get)
+			v1.POST("/workflows/:id/submit", auth.RequirePermission("automation", "create"), deps.Workflow.Submit)
+			v1.POST("/workflows/:id/approve", auth.RequirePermission("automation", "approve"), deps.Workflow.Approve)
+			v1.POST("/workflows/:id/execute", auth.RequirePermission("automation", "execute"), deps.Workflow.Execute)
+			v1.POST("/workflows/:id/cancel", auth.RequirePermission("automation", "cancel"), deps.Workflow.Cancel)
+			v1.POST("/workflows/:id/dry-run", deps.Workflow.DryRun)
+			v1.GET("/workflows/:id/executions", deps.Workflow.ListExecutions)
+			v1.GET("/workflow-executions/:id", deps.Workflow.GetExecution)
 		}
 
 		if deps.Jenkins != nil {
 			v1.GET("/jenkins/jobs", deps.Jenkins.ListJobs)
 			v1.GET("/jenkins/jobs/:name/builds", deps.Jenkins.ListBuilds)
-			v1.POST("/jenkins/jobs/:name/build", deps.Jenkins.Build)
+			v1.POST("/jenkins/jobs/:name/build", auth.RequirePermission("jenkins", "write"), deps.Jenkins.Build)
 			v1.GET("/jenkins/jobs/:name/builds/:number/log", deps.Jenkins.GetBuildLog)
 		}
 
 		if deps.ArgoCD != nil {
 			v1.GET("/argocd/apps", deps.ArgoCD.ListApps)
 			v1.GET("/argocd/apps/:name", deps.ArgoCD.GetApp)
-			v1.POST("/argocd/apps/:name/sync", deps.ArgoCD.SyncApp)
-			v1.POST("/argocd/apps/:name/refresh", deps.ArgoCD.RefreshApp)
+			v1.POST("/argocd/apps/:name/sync", auth.RequirePermission("argocd", "write"), deps.ArgoCD.SyncApp)
+			v1.POST("/argocd/apps/:name/refresh", auth.RequirePermission("argocd", "write"), deps.ArgoCD.RefreshApp)
 		}
 
 		if deps.Auth != nil {
-			// 登录接口公开。
-			v1.POST("/auth/login", deps.Auth.Login)
+			// P0-01: 登录接口已在 publicV1 注册，此处不重复注册。
 			v1.POST("/auth/logout", deps.Auth.Logout)
 			v1.GET("/auth/me", deps.Auth.Me)
 			v1.GET("/users", deps.Auth.ListUsers)
-			v1.POST("/users", deps.Auth.CreateUser)
-			v1.PUT("/users/:id", deps.Auth.UpdateUser)
-			v1.PUT("/users/:id/status", deps.Auth.UpdateUserStatus)
-			v1.PUT("/users/:id/password", deps.Auth.ResetPassword)
-			v1.PUT("/users/:id/roles", deps.Auth.AssignRoles)
+			v1.POST("/users", auth.RequirePermission("users", "write"), deps.Auth.CreateUser)
+			v1.PUT("/users/:id", auth.RequirePermission("users", "write"), deps.Auth.UpdateUser)
+			v1.PUT("/users/:id/status", auth.RequirePermission("users", "write"), deps.Auth.UpdateUserStatus)
+			v1.PUT("/users/:id/password", auth.RequirePermission("users", "write"), deps.Auth.ResetPassword)
+			v1.PUT("/users/:id/roles", auth.RequirePermission("users", "write"), deps.Auth.AssignRoles)
 			v1.GET("/roles", deps.Auth.ListRoles)
 		}
 
 		if deps.Audit != nil {
-			v1.GET("/audit-logs", deps.Audit.List)
+			v1.GET("/audit-logs", auth.RequirePermission("audit", "read"), deps.Audit.List)
 		}
 
 		if deps.Incident != nil {
 			v1.GET("/incidents", deps.Incident.List)
 			v1.GET("/incidents/:id", deps.Incident.Get)
-			v1.POST("/incidents/:id/acknowledge", deps.Incident.Acknowledge)
-			v1.POST("/incidents/:id/resolve", deps.Incident.Resolve)
-			v1.POST("/incidents/:id/close", deps.Incident.Close)
+			v1.POST("/incidents/:id/acknowledge", auth.RequirePermission("incidents", "write"), deps.Incident.Acknowledge)
+			v1.POST("/incidents/:id/resolve", auth.RequirePermission("incidents", "write"), deps.Incident.Resolve)
+			v1.POST("/incidents/:id/close", auth.RequirePermission("incidents", "write"), deps.Incident.Close)
 			v1.GET("/incidents/:id/signals", deps.Incident.Signals)
 			v1.GET("/incidents/:id/timeline", deps.Incident.Timeline)
 			if deps.AutomationAction != nil {
-				incAuth := v1.Group("")
-				if deps.AuthService != nil {
-					incAuth.Use(auth.AuthMiddleware(deps.AuthService))
-				}
-				incAuth.POST("/incidents/:id/actions", auth.RequirePermission("automation", "create"), deps.AutomationAction.CreateFromIncident)
+				// P0-01: v1 已统一 AuthMiddleware
+				v1.POST("/incidents/:id/actions", auth.RequirePermission("automation", "create"), deps.AutomationAction.CreateFromIncident)
 			}
 			if deps.IncidentRCA != nil {
 				v1.POST("/incidents/:id/rca", deps.IncidentRCA.Analyze)
@@ -300,9 +305,8 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 				v1.GET("/incidents/:id/evidence", deps.IncidentRCA.GetEvidence)
 			}
 			if deps.IncidentAI != nil {
-				aiAuth := v1.Group("")
-				aiAuth.Use(auth.AuthMiddleware(deps.AuthService))
-				aiAuth.POST("/incidents/:id/ai-analyze", deps.IncidentAI.Analyze)
+				// P0-01: v1 已统一 AuthMiddleware
+				v1.POST("/incidents/:id/ai-analyze", deps.IncidentAI.Analyze)
 				v1.GET("/incidents/:id/ai-analysis", deps.IncidentAI.GetLatest)
 				v1.GET("/incidents/:id/ai-analysis/history", deps.IncidentAI.GetHistory)
 			}
@@ -313,7 +317,7 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 			v1.GET("/topology/nodes/:type/:name", deps.Topology.GetNode)
 			v1.GET("/topology/dependencies/:type/:name", deps.Topology.GetDependencies)
 			v1.GET("/topology/impact/:type/:name", deps.Topology.GetImpact)
-			v1.POST("/topology/cache/invalidate", deps.Topology.InvalidateCache)
+			v1.POST("/topology/cache/invalidate", auth.RequirePermission("topology", "write"), deps.Topology.InvalidateCache)
 		}
 	}
 

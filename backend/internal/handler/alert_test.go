@@ -2,6 +2,7 @@ package handler_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/aiops/aiops-platform/internal/alert"
 	"github.com/aiops/aiops-platform/internal/api"
+	"github.com/aiops/aiops-platform/internal/auth"
 	"github.com/aiops/aiops-platform/internal/cluster"
 	"github.com/aiops/aiops-platform/internal/handler"
 	"github.com/gin-gonic/gin"
@@ -31,10 +33,54 @@ func newTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+// newAuthService 创建一个测试用的 AuthService，并返回一个有效的 admin token。
+func newAuthService(t *testing.T, db *gorm.DB) (*auth.Service, string) {
+	t.Helper()
+	if err := db.AutoMigrate(&auth.User{}, &auth.Role{}, &auth.Permission{}); err != nil {
+		t.Fatal(err)
+	}
+	authRepo := auth.NewRepository(db)
+	authSvc := auth.NewService(authRepo, "test-secret-key-for-testing-only", time.Hour)
+
+	// 创建 admin 角色和用户
+	adminRole := &auth.Role{Name: "admin", Description: "admin"}
+	if err := db.Create(adminRole).Error; err != nil {
+		t.Fatal(err)
+	}
+	hashedPassword, err := auth.HashPassword("test-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminUser := &auth.User{
+		Username:     "admin",
+		PasswordHash: hashedPassword,
+		Status:       "active",
+		Roles:        []auth.Role{*adminRole},
+	}
+	if err := db.Create(adminUser).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// 生成 token
+	loginResp, err := authSvc.Login(context.Background(), auth.LoginRequest{
+		Username: "admin",
+		Password: "test-password",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return authSvc, loginResp.AccessToken
+}
+
 func newAlertRouter(t *testing.T, db *gorm.DB) *gin.Engine {
 	t.Helper()
+	return newAlertRouterWithAuth(t, db, nil)
+}
+
+func newAlertRouterWithAuth(t *testing.T, db *gorm.DB, authSvc *auth.Service) *gin.Engine {
+	t.Helper()
 	repo := alert.NewRepository(db)
-	return api.NewRouter("test", api.Deps{
+	deps := api.Deps{
 		Health:  &handler.HealthHandler{},
 		Cluster: &handler.ClusterHandler{Service: cluster.NewService(cluster.NewManager(nil))},
 		Alert: &handler.AlertHandler{
@@ -42,7 +88,11 @@ func newAlertRouter(t *testing.T, db *gorm.DB) *gin.Engine {
 			Aggregator:   alert.NewAggregator(repo),
 			NoiseReducer: alert.NewNoiseReducer(repo),
 		},
-	})
+	}
+	if authSvc != nil {
+		deps.AuthService = authSvc
+	}
+	return api.NewRouter("test", deps)
 }
 
 func TestAlertWebhookReceive(t *testing.T) {
@@ -224,9 +274,11 @@ func TestAlertAcknowledge(t *testing.T) {
 		Fingerprint: "ack-1", Alertname: "AckTest", Status: "firing", StartsAt: time.Now(),
 	})
 
-	r := newAlertRouter(t, db)
+	authSvc, token := newAuthService(t, db)
+	r := newAlertRouterWithAuth(t, db, authSvc)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/alerts/"+itoa(saved.ID)+"/acknowledge", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -246,9 +298,11 @@ func TestAlertResolve(t *testing.T) {
 		Fingerprint: "res-1", Alertname: "ResTest", Status: "firing", StartsAt: time.Now(),
 	})
 
-	r := newAlertRouter(t, db)
+	authSvc, token := newAuthService(t, db)
+	r := newAlertRouterWithAuth(t, db, authSvc)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/alerts/"+itoa(saved.ID)+"/resolve", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {

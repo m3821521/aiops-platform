@@ -139,6 +139,26 @@ func (r *Repository) UpdateStatusIfRunning(ctx context.Context, id int64, newSta
 	return result.RowsAffected == 1, nil
 }
 
+// ClaimForExecution P0-04: 原子地将 Workflow 从 approved 声明为 running，并设置 lease。
+// 使用 CAS（WHERE status='approved'）防止并发重复执行（TOCTOU 竞态）。
+// 返回 (claimed bool, error)。claimed=true 表示成功获得执行权。
+func (r *Repository) ClaimForExecution(ctx context.Context, id int64, leaseDuration time.Duration) (bool, error) {
+	now := time.Now()
+	leaseExpires := now.Add(leaseDuration)
+	result := r.db.WithContext(ctx).Model(&Workflow{}).
+		Where("id = ? AND status = ?", id, WorkflowStatusApproved).
+		Updates(map[string]interface{}{
+			"status":           WorkflowStatusRunning,
+			"started_at":       now,
+			"updated_at":       now,
+			"lease_expires_at": leaseExpires,
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
 func (r *Repository) CreateStep(ctx context.Context, step *WorkflowStep) error {
 	return r.db.WithContext(ctx).Create(step).Error
 }

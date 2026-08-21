@@ -406,18 +406,24 @@ func (s *Service) Execute(ctx context.Context, workflowID, userID int64) (*Workf
 	if wf.CreatedBy == userID {
 		return nil, fmt.Errorf("四眼原则：申请人不能执行自己创建的工作流")
 	}
-	// 并发保护：防止 running 状态重复执行
-	if wf.Status == WorkflowStatusRunning {
-		return nil, fmt.Errorf("Workflow 正在执行中，不能重复执行")
+
+	// P0-04: 原子 Claim，防止 TOCTOU 竞态导致重复执行。
+	// 使用 CAS (WHERE status='approved') 确保只有一个请求能成功声明执行权。
+	claimed, err := s.repo.ClaimForExecution(ctx, workflowID, wfLeaseTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("claim workflow for execution failed: %w", err)
+	}
+	if !claimed {
+		return nil, fmt.Errorf("Workflow 已被其他请求声明执行或状态已变更，无法重复执行")
+	}
+
+	// Claim 成功后重新读取 wf，获取更新后的状态和 lease。
+	wf, err = s.repo.FindByID(ctx, workflowID)
+	if err != nil {
+		return nil, fmt.Errorf("reload workflow after claim failed: %w", err)
 	}
 
 	now := time.Now()
-	wf.Status = WorkflowStatusRunning
-	wf.StartedAt = &now
-	wf.UpdatedAt = now
-	leaseExpires := now.Add(wfLeaseTimeout)
-	wf.LeaseExpiresAt = &leaseExpires
-	s.repo.Update(ctx, wf)
 
 	// 创建工作流执行记录
 	exec := &WorkflowExecution{

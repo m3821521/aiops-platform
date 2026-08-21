@@ -18,12 +18,16 @@
 package connection
 
 import (
+	"context"
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/aiops/aiops-platform/internal/ssrf"
 )
 
 // ConnectionType 定义支持的外部系统连接类型。
@@ -161,6 +165,18 @@ func (c *Connection) Validate() error {
 		allowedSchemes := map[string]bool{"http": true, "https": true, "unix": true, "tcp": true}
 		if !allowedSchemes[scheme] {
 			return errors.New("不支持的 connection endpoint scheme: " + scheme + "（仅允许 http/https/unix/tcp）")
+		}
+
+		// P0-03: SSRF 防护 - 验证 endpoint 解析后的 IP 地址
+		// 阻止 loopback (127.0.0.0/8, ::1)、link-local (169.254.0.0/16, 包括云元数据服务 169.254.169.254)、unspecified (0.0.0.0, ::)
+		// unix scheme 使用本地 socket，不需要 IP 验证
+		if scheme == "http" || scheme == "https" || scheme == "tcp" {
+			st := ssrf.NewSafeTransport(ssrf.DefaultConfig())
+			validateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := st.ValidateEndpoint(validateCtx, c.Endpoint); err != nil {
+				return fmt.Errorf("endpoint SSRF 校验失败: %w", err)
+			}
 		}
 	}
 

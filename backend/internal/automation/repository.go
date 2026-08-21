@@ -153,6 +153,25 @@ func (r *ActionRepository) UpdateStatusIfRunning(ctx context.Context, id int64, 
 	return result.RowsAffected == 1, nil
 }
 
+// ClaimForExecution P0-05: 原子地将 Action 从 approved 声明为 running，并设置 lease。
+// 使用 CAS（WHERE status='approved'）防止并发重复执行（TOCTOU 竞态）。
+// 返回 (claimed bool, error)。claimed=true 表示成功获得执行权。
+func (r *ActionRepository) ClaimForExecution(ctx context.Context, id int64, leaseDuration time.Duration) (bool, error) {
+	now := time.Now()
+	leaseExpires := now.Add(leaseDuration)
+	result := r.db.WithContext(ctx).Model(&Action{}).
+		Where("id = ? AND status = ?", id, StatusApproved).
+		Updates(map[string]interface{}{
+			"status":           StatusRunning,
+			"updated_at":       now,
+			"lease_expires_at": leaseExpires,
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
 // ExecutionRepository 是 ActionExecution 的 Repository。
 type ExecutionRepository struct {
 	db *gorm.DB

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/aiops/aiops-platform/internal/ssrf"
 )
 
 // ConnectionProvider 是所有外部系统连接 Provider 的基础接口。
@@ -104,6 +106,19 @@ func (r *ProviderRegistry) List() []ConnectionType {
 func (r *ProviderRegistry) TestConnection(ctx context.Context, conn *Connection) (*TestConnectionResult, error) {
 	if conn == nil {
 		return nil, errors.New("connection 不能为空")
+	}
+
+	// P0-03: SSRF 防护 - 在测试连接前验证 endpoint 解析后的 IP 地址
+	// 阻止 loopback、link-local（包括云元数据服务 169.254.169.254）、unspecified 地址
+	defaultTransport := ssrf.NewSafeTransport(ssrf.DefaultConfig())
+	if err := defaultTransport.ValidateEndpoint(ctx, conn.Endpoint); err != nil {
+		return &TestConnectionResult{
+			Status:       StatusUnavailable,
+			LatencyMs:    0,
+			ErrorCode:    "SSRF_BLOCKED",
+			ErrorMessage: "endpoint 被 SSRF 防护阻止: " + err.Error(),
+			CheckedAt:    time.Now(),
+		}, nil
 	}
 
 	provider, err := r.Get(conn.Type)
