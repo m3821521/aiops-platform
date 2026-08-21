@@ -109,11 +109,26 @@ func (st *SafeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 // HTTPClient 返回一个使用 SafeTransport 的 http.Client。
+// 同时设置 CheckRedirect 阻止重定向到被阻止的地址。
 func (st *SafeTransport) HTTPClient() *http.Client {
 	return &http.Client{
-		Transport: st,
-		Timeout:   30 * time.Second,
+		Transport:     st,
+		Timeout:       30 * time.Second,
+		CheckRedirect: st.checkRedirect,
 	}
+}
+
+// checkRedirect 是 http.Client.CheckRedirect 回调。
+// 在跟随重定向前验证重定向目标地址，防止通过 302 重定向绕过 SSRF 防护。
+func (st *SafeTransport) checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("ssrf: too many redirects (max 10)")
+	}
+	// 验证重定向目标的主机名
+	if err := st.ValidateEndpoint(req.Context(), req.URL.String()); err != nil {
+		return fmt.Errorf("ssrf: redirect target blocked: %w", err)
+	}
+	return nil
 }
 
 // control 是 net.Dialer.Control 函数，在 TCP 连接建立前验证目标 IP。

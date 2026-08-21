@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aiops/aiops-platform/internal/connection"
+	"github.com/aiops/aiops-platform/internal/ssrf"
 )
 
 // GrafanaProvider 实现 Grafana 可视化连接 Provider。
@@ -28,9 +29,8 @@ type GrafanaProvider struct {
 func NewGrafanaProvider(credentialService *connection.CredentialService) *GrafanaProvider {
 	return &GrafanaProvider{
 		credentialService: credentialService,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		// P0-03: 使用 SafeTransport 防止 SSRF
+		httpClient: ssrf.NewSafeTransport(ssrf.DefaultConfig()).HTTPClient(),
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aiops/aiops-platform/internal/connection"
+	"github.com/aiops/aiops-platform/internal/ssrf"
 )
 
 // JenkinsProvider 实现 connection.CIProvider 接口。
@@ -20,9 +21,8 @@ type JenkinsProvider struct {
 func NewJenkinsProvider(credentialService *connection.CredentialService) *JenkinsProvider {
 	return &JenkinsProvider{
 		credentialService: credentialService,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		// P0-03: 使用 SafeTransport 防止 SSRF，在实际 TCP 连接前验证目标 IP
+		httpClient: ssrf.NewSafeTransport(ssrf.DefaultConfig()).HTTPClient(),
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aiops/aiops-platform/internal/connection"
+	"github.com/aiops/aiops-platform/internal/ssrf"
 )
 
 // DockerProvider 实现 Docker 容器引擎连接 Provider。
@@ -143,36 +144,29 @@ func (p *DockerProvider) buildHTTPClient(ctx context.Context, conn *connection.C
 	}
 
 	endpoint := conn.Endpoint
-	transport := &http.Transport{}
 
-	// Unix Socket 连接
+	// Unix Socket 连接：使用自定义 DialContext 连接固定 socket 文件（安全，无 SSRF 风险）
 	if strings.HasPrefix(endpoint, "unix://") {
 		socketPath := strings.TrimPrefix(endpoint, "unix://")
-		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return net.Dial("unix", socketPath)
+		transport := &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return net.Dial("unix", socketPath)
+			},
 		}
-	} else if strings.HasPrefix(endpoint, "tcp://") {
-		// TCP 连接，移除 tcp:// 前缀
-		// HTTP client 会使用标准 TCP 连接
-		endpoint = strings.TrimPrefix(endpoint, "tcp://")
-	} else if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
-		// HTTP/HTTPS 连接，保持原样
-	} else {
-		// 默认当作 TCP 地址
-		if !strings.Contains(endpoint, ":") {
-			endpoint = endpoint + ":2375"
-		}
+		return &http.Client{
+			Transport: transport,
+			Timeout:   30 * time.Second,
+		}, nil
 	}
 
-	client := &http.Client{
-		Transport: transport,
-		Timeout:   30 * time.Second,
-	}
+	// TCP / HTTP / HTTPS 连接：P0-03 使用 SafeTransport 防止 SSRF
+	// 在实际 TCP 连接前验证目标 IP，阻止 loopback/link-local/云元数据服务
+	safeClient := ssrf.NewSafeTransport(ssrf.DefaultConfig()).HTTPClient()
 
 	// TODO: TLS 支持（从 Credential 获取 ca/cert/key）
 	// 当前阶段先支持 Unix Socket 和无认证 TCP 连接
 
-	return client, nil
+	return safeClient, nil
 }
 
 // getAPIBaseURL 获取 Docker API 基础 URL。

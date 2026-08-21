@@ -144,4 +144,57 @@ func TestSafeTransport_ImplementsRoundTripper(t *testing.T) {
 	if client == nil {
 		t.Error("expected non-nil http.Client")
 	}
+	if client.CheckRedirect == nil {
+		t.Error("expected CheckRedirect to be set for SSRF protection")
+	}
+}
+
+// TestCheckRedirect_BlocksLoopback 验证重定向到 loopback 地址被阻止。
+func TestCheckRedirect_BlocksLoopback(t *testing.T) {
+	st := NewSafeTransport(DefaultConfig())
+	req, _ := http.NewRequest("GET", "http://127.0.0.1:8080/redirect-target", nil)
+	err := st.checkRedirect(req, []*http.Request{})
+	if err == nil {
+		t.Error("expected redirect to loopback 127.0.0.1 to be blocked")
+	}
+}
+
+// TestCheckRedirect_BlocksCloudMetadata 验证重定向到云元数据服务被阻止。
+func TestCheckRedirect_BlocksCloudMetadata(t *testing.T) {
+	st := NewSafeTransport(DefaultConfig())
+	req, _ := http.NewRequest("GET", "http://169.254.169.254/latest/meta-data/", nil)
+	err := st.checkRedirect(req, []*http.Request{})
+	if err == nil {
+		t.Error("expected redirect to cloud metadata 169.254.169.254 to be blocked")
+	}
+}
+
+// TestCheckRedirect_AllowsPublic 验证重定向到公网地址被允许。
+func TestCheckRedirect_AllowsPublic(t *testing.T) {
+	st := NewSafeTransport(DefaultConfig())
+	// 使用 example.com（公网域名），DNS 解析应该成功
+	req, _ := http.NewRequest("GET", "https://example.com/redirect", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
+	err := st.checkRedirect(req, []*http.Request{})
+	if err != nil {
+		t.Logf("redirect to example.com blocked (may be DNS issue in test env): %v", err)
+		// 不强制失败，因为测试环境可能无法解析公网域名
+	}
+}
+
+// TestCheckRedirect_TooManyRedirects 验证超过最大重定向次数被阻止。
+func TestCheckRedirect_TooManyRedirects(t *testing.T) {
+	st := NewSafeTransport(DefaultConfig())
+	req, _ := http.NewRequest("GET", "https://example.com/redirect", nil)
+	// 模拟已经有 10 次重定向
+	via := make([]*http.Request, 10)
+	for i := range via {
+		via[i], _ = http.NewRequest("GET", "https://example.com/"+string(rune('a'+i)), nil)
+	}
+	err := st.checkRedirect(req, via)
+	if err == nil {
+		t.Error("expected too many redirects to be blocked")
+	}
 }

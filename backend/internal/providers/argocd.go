@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aiops/aiops-platform/internal/connection"
+	"github.com/aiops/aiops-platform/internal/ssrf"
 )
 
 // ArgoCDProvider 实现 connection.CDProvider 接口。
@@ -21,9 +22,8 @@ type ArgoCDProvider struct {
 func NewArgoCDProvider(credentialService *connection.CredentialService) *ArgoCDProvider {
 	return &ArgoCDProvider{
 		credentialService: credentialService,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		// P0-03: 使用 SafeTransport 防止 SSRF
+		httpClient: ssrf.NewSafeTransport(ssrf.DefaultConfig()).HTTPClient(),
 	}
 }
 

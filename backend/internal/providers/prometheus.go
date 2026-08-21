@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aiops/aiops-platform/internal/connection"
+	"github.com/aiops/aiops-platform/internal/ssrf"
 )
 
 // PrometheusProvider 实现 connection.MetricsProvider 接口。
@@ -28,9 +29,8 @@ type PrometheusProvider struct {
 func NewPrometheusProvider(credentialService *connection.CredentialService) *PrometheusProvider {
 	return &PrometheusProvider{
 		credentialService: credentialService,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		// P0-03: 使用 SafeTransport 防止 SSRF
+		httpClient: ssrf.NewSafeTransport(ssrf.DefaultConfig()).HTTPClient(),
 	}
 }
 

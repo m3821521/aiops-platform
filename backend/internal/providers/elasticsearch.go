@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aiops/aiops-platform/internal/connection"
+	"github.com/aiops/aiops-platform/internal/ssrf"
 )
 
 // ElasticsearchProvider 实现 connection.LogProvider 接口。
@@ -21,9 +22,8 @@ type ElasticsearchProvider struct {
 func NewElasticsearchProvider(credentialService *connection.CredentialService) *ElasticsearchProvider {
 	return &ElasticsearchProvider{
 		credentialService: credentialService,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		// P0-03: 使用 SafeTransport 防止 SSRF
+		httpClient: ssrf.NewSafeTransport(ssrf.DefaultConfig()).HTTPClient(),
 	}
 }
 
