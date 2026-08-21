@@ -21,6 +21,8 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -44,6 +46,8 @@ const (
 	TypeJenkins ConnectionType = "jenkins"
 	// TypeArgoCD ArgoCD CD 连接。
 	TypeArgoCD ConnectionType = "argocd"
+	// TypeDocker Docker 容器引擎连接。
+	TypeDocker ConnectionType = "docker"
 )
 
 // ConnectionStatus 定义连接状态。
@@ -150,10 +154,20 @@ func (c *Connection) Validate() error {
 		return errors.New("connection endpoint 不能为空")
 	}
 
+	// URL scheme 白名单验证：禁止 file:// 等危险协议，防止 SSRF
+	// 允许 http/https/unix/tcp（AIOps 平台需要连接内部中间件，内网地址是正常场景）
+	if parsed, err := url.Parse(c.Endpoint); err == nil && parsed.Scheme != "" {
+		scheme := strings.ToLower(parsed.Scheme)
+		allowedSchemes := map[string]bool{"http": true, "https": true, "unix": true, "tcp": true}
+		if !allowedSchemes[scheme] {
+			return errors.New("不支持的 connection endpoint scheme: " + scheme + "（仅允许 http/https/unix/tcp）")
+		}
+	}
+
 	// 验证 type 是否为支持的类型
 	switch c.Type {
 	case TypeKubernetes, TypePrometheus, TypeGrafana, TypeElasticsearch,
-		TypeMySQL, TypeRedis, TypeJenkins, TypeArgoCD:
+		TypeMySQL, TypeRedis, TypeJenkins, TypeArgoCD, TypeDocker:
 		// 有效类型
 	default:
 		return errors.New("不支持的 connection type: " + string(c.Type))

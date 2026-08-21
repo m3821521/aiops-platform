@@ -5,6 +5,7 @@ import {
 import type { Deployment } from '@/types'
 import { k8sApi } from '@/api/kubernetes'
 import { automationApi } from '@/api/automation'
+import { usePermission } from '@/utils/permission'
 import dayjs from 'dayjs'
 
 interface Props {
@@ -16,6 +17,7 @@ interface Props {
 }
 
 export default function DeploymentDetail({ deployment, cluster, open, onClose, onScaled }: Props) {
+  const canWrite = usePermission('cluster', 'write')
   const [loading, setLoading] = useState(false)
   const [detail, setDetail] = useState<Deployment | null>(null)
   const [error, setError] = useState('')
@@ -65,7 +67,7 @@ export default function DeploymentDetail({ deployment, cluster, open, onClose, o
         {detail && (
           <Space direction="vertical" style={{ width: '100%' }} size="large">
             <Card size="small" title="基本信息" extra={
-              <Button type="primary" size="small" onClick={() => setScaleOpen(true)}>扩容/缩容</Button>
+              canWrite && <Button type="primary" size="small" onClick={() => setScaleOpen(true)}>扩容/缩容</Button>
             }>
               <Descriptions column={1} size="small" bordered>
                 <Descriptions.Item label="Namespace"><Tag>{detail.namespace}</Tag></Descriptions.Item>

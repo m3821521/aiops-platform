@@ -92,7 +92,9 @@ type Workflow struct {
 	StartedAt   *time.Time     `json:"started_at,omitempty"`
 	FinishedAt  *time.Time     `json:"finished_at,omitempty"`
 	DurationMs  int64          `json:"duration_ms"`
+	Error       string         `json:"error,omitempty"`
 	Steps       []WorkflowStep `gorm:"foreignKey:WorkflowID" json:"steps,omitempty"`
+	LeaseExpiresAt *time.Time  `gorm:"index" json:"lease_expires_at,omitempty"`
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
 }

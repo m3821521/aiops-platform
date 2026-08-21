@@ -3,10 +3,34 @@ package automation
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/aiops/aiops-platform/internal/cluster"
 )
+
+// parseReplicas 从 parameters 中解析 replicas，支持 float64 和 string 类型。
+func parseReplicas(params map[string]interface{}) (int32, error) {
+	if params == nil || params["replicas"] == nil {
+		return 0, fmt.Errorf("replicas 参数不存在")
+	}
+	switch v := params["replicas"].(type) {
+	case float64:
+		return int32(v), nil
+	case int:
+		return int32(v), nil
+	case int32:
+		return v, nil
+	case string:
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return 0, fmt.Errorf("replicas 参数无效: %s", v)
+		}
+		return int32(n), nil
+	default:
+		return 0, fmt.Errorf("replicas 参数类型不支持: %T", params["replicas"])
+	}
+}
 
 // Executor 是操作执行器的统一接口。
 type Executor interface {
@@ -127,7 +151,10 @@ func (e *KubernetesExecutor) DryRun(ctx context.Context, action Action) (*DryRun
 			return nil, fmt.Errorf("Dry Run 失败: Deployment %s/%s 不存在", action.Namespace, action.TargetName)
 		}
 		params := action.GetParameters()
-		replicas := int(params["replicas"].(float64))
+		replicas, err := parseReplicas(params)
+		if err != nil {
+			return nil, fmt.Errorf("Dry Run 失败: %w", err)
+		}
 		currentReplicas := deployment.Status.Replicas
 		result.CurrentState = fmt.Sprintf("Deployment %s/%s 当前副本数: %d (期望: %d)",
 			action.Namespace, action.TargetName, currentReplicas, replicas)
@@ -155,8 +182,11 @@ func (e *KubernetesExecutor) Execute(ctx context.Context, action Action) (*Execu
 		return &ExecutionResult{Success: true, Message: fmt.Sprintf("Pod %s/%s 已重启", action.Namespace, action.TargetName)}, nil
 	case ActionScaleDeployment:
 		params := action.GetParameters()
-		replicas := int32(params["replicas"].(float64))
-		err := e.cluster.ScaleDeployment(execCtx, action.Cluster, action.Namespace, action.TargetName, replicas)
+		replicas, err := parseReplicas(params)
+		if err != nil {
+			return &ExecutionResult{Success: false, Error: err.Error()}, nil
+		}
+		err = e.cluster.ScaleDeployment(execCtx, action.Cluster, action.Namespace, action.TargetName, replicas)
 		if err != nil {
 			return &ExecutionResult{Success: false, Error: err.Error()}, nil
 		}
@@ -220,7 +250,14 @@ func (e *KubernetesExecutor) Verify(ctx context.Context, action Action, result *
 		}
 
 		params := action.GetParameters()
-		expectedReplicas := int32(params["replicas"].(float64))
+		expectedReplicas, err := parseReplicas(params)
+		if err != nil {
+			return &VerificationResult{
+				Verified: false,
+				Status:   "failed",
+				Message:  fmt.Sprintf("无法解析 replicas 参数: %v", err),
+			}, nil
+		}
 
 		currentReplicas := int32(0)
 		if deployment.Status.Replicas != 0 {

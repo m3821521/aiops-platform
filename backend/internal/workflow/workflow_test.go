@@ -1067,3 +1067,329 @@ func TestP731RetryRegression(t *testing.T) {
 		}
 	}
 }
+
+// ==================== P1-R1 Crash Recovery Tests ====================
+
+// TestRecoverStaleExecutions 验证服务启动时恢复因 Worker 崩溃而永久停留在 RUNNING 状态的 Workflow。
+func TestRecoverStaleExecutions(t *testing.T) {
+	db := newTestWorkflowDB(t)
+	repo := NewRepository(db)
+	svc := NewService(repo, &mockActionExecutor{success: true})
+
+	ctx := context.Background()
+	now := time.Now()
+
+	// P2-02: Startup Recovery 不再使用 updated_at threshold。
+	// 同步执行模型下，服务重启意味着所有 running 都已中断，统一恢复。
+	staleWF := &Workflow{
+		Name:      "stale-workflow",
+		Status:    WorkflowStatusRunning,
+		Risk:      "medium",
+		CreatedBy: 1,
+		CreatedAt: now.Add(-10 * time.Minute),
+		UpdatedAt: now.Add(-10 * time.Minute),
+	}
+	if err := repo.Create(ctx, staleWF); err != nil {
+		t.Fatalf("create stale workflow failed: %v", err)
+	}
+
+	// P2-02: 启动时也会被恢复（同步执行模型下重启意味着中断）
+	freshWF := &Workflow{
+		Name:      "fresh-workflow",
+		Status:    WorkflowStatusRunning,
+		Risk:      "medium",
+		CreatedBy: 1,
+		CreatedAt: now.Add(-1 * time.Minute),
+		UpdatedAt: now.Add(-1 * time.Minute),
+	}
+	if err := repo.Create(ctx, freshWF); err != nil {
+		t.Fatalf("create fresh workflow failed: %v", err)
+	}
+
+	// 执行启动恢复（threshold 参数保留用于兼容，但不再使用）
+	recovered, err := svc.RecoverStaleExecutions(ctx, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("recover stale executions failed: %v", err)
+	}
+	// P2-02: 启动时所有 running 都被恢复
+	if recovered != 2 {
+		t.Errorf("expected 2 recovered workflows on startup, got %d", recovered)
+	}
+
+	// 验证 stale Workflow 已被标记为 FAILED
+	recoveredStale, err := repo.FindByID(ctx, staleWF.ID)
+	if err != nil {
+		t.Fatalf("find stale workflow failed: %v", err)
+	}
+	if recoveredStale.Status != WorkflowStatusFailed {
+		t.Errorf("expected stale workflow status %s, got %s", WorkflowStatusFailed, recoveredStale.Status)
+	}
+	if recoveredStale.FinishedAt == nil {
+		t.Error("expected stale workflow to have finished_at set")
+	}
+
+	// P2-02: 验证 fresh Workflow 也被标记为 FAILED（启动时全量恢复）
+	recoveredFresh, err := repo.FindByID(ctx, freshWF.ID)
+	if err != nil {
+		t.Fatalf("find fresh workflow failed: %v", err)
+	}
+	if recoveredFresh.Status != WorkflowStatusFailed {
+		t.Errorf("expected fresh workflow status %s on startup recovery, got %s", WorkflowStatusFailed, recoveredFresh.Status)
+	}
+}
+
+// TestRecoverStaleExecutions_NoStale 验证没有 stale Workflow 时恢复操作不影响现有数据。
+func TestRecoverStaleExecutions_NoStale(t *testing.T) {
+	db := newTestWorkflowDB(t)
+	repo := NewRepository(db)
+	svc := NewService(repo, &mockActionExecutor{success: true})
+
+	ctx := context.Background()
+
+	// 创建一个 DRAFT 状态的 Workflow（不是 RUNNING，不应被恢复）
+	pendingWF := &Workflow{
+		Name:      "pending-workflow",
+		Status:    WorkflowStatusDraft,
+		Risk:      "medium",
+		CreatedBy: 1,
+	}
+	if err := repo.Create(ctx, pendingWF); err != nil {
+		t.Fatalf("create pending workflow failed: %v", err)
+	}
+
+	// 执行恢复
+	recovered, err := svc.RecoverStaleExecutions(ctx, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("recover stale executions failed: %v", err)
+	}
+	if recovered != 0 {
+		t.Errorf("expected 0 recovered workflows, got %d", recovered)
+	}
+
+	// 验证 pending Workflow 状态不变
+	wf, err := repo.FindByID(ctx, pendingWF.ID)
+	if err != nil {
+		t.Fatalf("find workflow failed: %v", err)
+	}
+	if wf.Status != WorkflowStatusDraft {
+		t.Errorf("expected workflow status %s, got %s", WorkflowStatusDraft, wf.Status)
+	}
+}
+
+// ==================== P2-02 Lease / Heartbeat / Recovery Tests ====================
+
+func createRunningWorkflow(t *testing.T, repo *Repository, leaseExpiresAt *time.Time) *Workflow {
+	t.Helper()
+	wf := &Workflow{
+		Name:           "test-workflow",
+		Status:         WorkflowStatusRunning,
+		Risk:           "medium",
+		CreatedBy:      1,
+		LeaseExpiresAt: leaseExpiresAt,
+	}
+	if err := repo.Create(context.Background(), wf); err != nil {
+		t.Fatalf("create running workflow failed: %v", err)
+	}
+	return wf
+}
+
+func TestWF_FreshRunningNotRecovered(t *testing.T) {
+	db := newTestWorkflowDB(t)
+	repo := NewRepository(db)
+	ctx := context.Background()
+
+	future := time.Now().Add(60 * time.Second)
+	createRunningWorkflow(t, repo, &future)
+
+	count, err := repo.RecoverExpiredLease(ctx)
+	if err != nil {
+		t.Fatalf("recover expired lease failed: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 recovered, got %d", count)
+	}
+}
+
+func TestWF_ExpiredLeaseRecovered(t *testing.T) {
+	db := newTestWorkflowDB(t)
+	repo := NewRepository(db)
+	ctx := context.Background()
+
+	past := time.Now().Add(-60 * time.Second)
+	wf := createRunningWorkflow(t, repo, &past)
+
+	count, err := repo.RecoverExpiredLease(ctx)
+	if err != nil {
+		t.Fatalf("recover expired lease failed: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 recovered, got %d", count)
+	}
+
+	result, err := repo.FindByID(ctx, wf.ID)
+	if err != nil {
+		t.Fatalf("find workflow failed: %v", err)
+	}
+	if result.Status != WorkflowStatusFailed {
+		t.Errorf("expected status %s, got %s", WorkflowStatusFailed, result.Status)
+	}
+}
+
+func TestWF_LeaseRefresh(t *testing.T) {
+	db := newTestWorkflowDB(t)
+	repo := NewRepository(db)
+	ctx := context.Background()
+
+	past := time.Now().Add(-60 * time.Second)
+	wf := createRunningWorkflow(t, repo, &past)
+
+	if err := repo.RefreshLease(ctx, wf.ID, 60*time.Second); err != nil {
+		t.Fatalf("refresh lease failed: %v", err)
+	}
+
+	count, err := repo.RecoverExpiredLease(ctx)
+	if err != nil {
+		t.Fatalf("recover expired lease failed: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 recovered after refresh, got %d", count)
+	}
+}
+
+func TestWF_RecoveryNullLeaseNotRecovered(t *testing.T) {
+	db := newTestWorkflowDB(t)
+	repo := NewRepository(db)
+	ctx := context.Background()
+
+	createRunningWorkflow(t, repo, nil)
+
+	count, err := repo.RecoverExpiredLease(ctx)
+	if err != nil {
+		t.Fatalf("recover expired lease failed: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 recovered for null lease, got %d", count)
+	}
+}
+
+func TestWF_UpdateStatusIfRunning_Success(t *testing.T) {
+	db := newTestWorkflowDB(t)
+	repo := NewRepository(db)
+	ctx := context.Background()
+
+	future := time.Now().Add(60 * time.Second)
+	wf := createRunningWorkflow(t, repo, &future)
+
+	updated, err := repo.UpdateStatusIfRunning(ctx, wf.ID, WorkflowStatusSuccess)
+	if err != nil {
+		t.Fatalf("update status if running failed: %v", err)
+	}
+	if !updated {
+		t.Error("expected update success")
+	}
+
+	result, _ := repo.FindByID(ctx, wf.ID)
+	if result.Status != WorkflowStatusSuccess {
+		t.Errorf("expected status %s, got %s", WorkflowStatusSuccess, result.Status)
+	}
+	if result.LeaseExpiresAt != nil {
+		t.Error("expected lease cleared")
+	}
+}
+
+func TestWF_UpdateStatusIfRunning_AlreadyChanged(t *testing.T) {
+	db := newTestWorkflowDB(t)
+	repo := NewRepository(db)
+	ctx := context.Background()
+
+	future := time.Now().Add(60 * time.Second)
+	wf := createRunningWorkflow(t, repo, &future)
+
+	wf.Status = WorkflowStatusFailed
+	repo.Update(ctx, wf)
+
+	updated, err := repo.UpdateStatusIfRunning(ctx, wf.ID, WorkflowStatusSuccess)
+	if err != nil {
+		t.Fatalf("update status if running failed: %v", err)
+	}
+	if updated {
+		t.Error("expected update failure because status already changed")
+	}
+}
+
+func TestWF_RecoverySetsFailed(t *testing.T) {
+	db := newTestWorkflowDB(t)
+	repo := NewRepository(db)
+	ctx := context.Background()
+
+	past := time.Now().Add(-60 * time.Second)
+	wf := createRunningWorkflow(t, repo, &past)
+
+	count, err := repo.RecoverExpiredLease(ctx)
+	if err != nil {
+		t.Fatalf("recover failed: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 recovered, got %d", count)
+	}
+
+	result, err := repo.FindByID(ctx, wf.ID)
+	if err != nil {
+		t.Fatalf("find failed: %v", err)
+	}
+	if result.Status != WorkflowStatusFailed {
+		t.Errorf("expected status %s, got %s", WorkflowStatusFailed, result.Status)
+	}
+	if result.FinishedAt == nil {
+		t.Error("expected finished_at set")
+	}
+	if result.Error == "" {
+		t.Error("expected error set")
+	}
+	if result.LeaseExpiresAt != nil {
+		t.Error("expected lease cleared")
+	}
+}
+
+func TestWF_StartupRecoveryExistingRunning(t *testing.T) {
+	db := newTestWorkflowDB(t)
+	repo := NewRepository(db)
+	ctx := context.Background()
+
+	createRunningWorkflow(t, repo, nil)
+	future := time.Now().Add(60 * time.Second)
+	createRunningWorkflow(t, repo, &future)
+
+	count, err := repo.MarkStaleRunningAsFailed(ctx, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("startup recovery failed: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2 recovered on startup, got %d", count)
+	}
+}
+
+func TestWF_RecoveryCASRace(t *testing.T) {
+	db := newTestWorkflowDB(t)
+	repo := NewRepository(db)
+	ctx := context.Background()
+
+	past := time.Now().Add(-60 * time.Second)
+	createRunningWorkflow(t, repo, &past)
+
+	done := make(chan int64, 2)
+	go func() {
+		c, _ := repo.RecoverExpiredLease(ctx)
+		done <- c
+	}()
+	go func() {
+		c, _ := repo.RecoverExpiredLease(ctx)
+		done <- c
+	}()
+
+	c1 := <-done
+	c2 := <-done
+	if c1+c2 != 1 {
+		t.Errorf("expected total 1 recovered (CAS race), got %d (%d + %d)", c1+c2, c1, c2)
+	}
+}

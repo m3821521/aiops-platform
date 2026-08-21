@@ -240,7 +240,7 @@ func defaultSystemPrompt() string {
     {"cause": "原因描述", "likelihood": "high|medium|low"}
   ],
   "recommendations": [
-    {"priority": "P0|P1|P2|P3", "title": "建议标题", "description": "详细描述", "reason": "原因", "risk": "low|medium|high|critical", "action_type": "observe|investigate|restart|scale|rollback|config_change|network_check", "target": "目标资源名", "namespace": "命名空间", "parameters": {"key": "value"}}
+    {"priority": "P0|P1|P2|P3", "title": "建议标题", "description": "详细描述", "reason": "原因", "risk": "low|medium|high|critical", "action_type": "restart_pod|scale_deployment|jenkins_build|argocd_sync", "target": "目标资源名", "namespace": "命名空间", "parameters": {"key": "value"}}
   ],
   "impact": [
     {"resource_type": "pod|node|deployment|service", "resource_name": "名称", "namespace": "命名空间", "impact_level": "critical|high|medium|low"}

@@ -1,9 +1,13 @@
 package handler
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"strconv"
+	"time"
 
+	"github.com/aiops/aiops-platform/internal/audit"
 	"github.com/aiops/aiops-platform/internal/auth"
 	"github.com/aiops/aiops-platform/pkg/response"
 	"github.com/gin-gonic/gin"
@@ -13,6 +17,33 @@ import (
 type AuthHandler struct {
 	AuthService *auth.Service
 	UserRepo    *auth.Repository
+	AuditRepo   *audit.Repository
+}
+
+// writeAudit 异步写入审计日志，不阻塞响应。
+func (h *AuthHandler) writeAudit(c *gin.Context, userID *int64, username, action, resource, resourceID, result, errMsg string) {
+	if h.AuditRepo == nil {
+		return
+	}
+	log := &audit.Log{
+		UserID:       userID,
+		Username:     username,
+		Action:       action,
+		Resource:     resource,
+		ResourceID:   resourceID,
+		Result:       result,
+		ErrorMessage: errMsg,
+		IP:           c.ClientIP(),
+		UserAgent:    c.Request.UserAgent(),
+		CreatedAt:    time.Now(),
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := h.AuditRepo.Create(ctx, log); err != nil {
+			slog.Error("failed to write auth audit log", "action", action, "error", err)
+		}
+	}()
 }
 
 // Login 处理 POST /api/v1/auth/login
@@ -24,15 +55,22 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	var req auth.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		h.writeAudit(c, nil, req.Username, "LOGIN_FAILED", "auth", "", "failed", "请求体格式错误")
 		response.BadRequest(c, "请求体格式错误: "+err.Error())
 		return
 	}
 
 	result, err := h.AuthService.Login(c.Request.Context(), req)
 	if err != nil {
+		// 登录失败审计：不记录密码，只记录用户名和错误原因
+		h.writeAudit(c, nil, req.Username, "LOGIN_FAILED", "auth", "", "failed", err.Error())
 		response.Unauthorized(c, err.Error())
 		return
 	}
+
+	// 登录成功审计
+	userID := result.User.ID
+	h.writeAudit(c, &userID, req.Username, "LOGIN_SUCCESS", "auth", "", "success", "")
 
 	response.OK(c, result)
 }
@@ -40,6 +78,11 @@ func (h *AuthHandler) Login(c *gin.Context) {
 // Logout 处理 POST /api/v1/auth/logout
 // JWT 是无状态的，登出由前端删除 token 完成。
 func (h *AuthHandler) Logout(c *gin.Context) {
+	// 登出审计：从 token 解析用户信息
+	user := auth.CurrentUser(c)
+	if user != nil {
+		h.writeAudit(c, &user.ID, user.Username, "LOGOUT", "auth", "", "success", "")
+	}
 	response.OK(c, gin.H{"message": "登出成功"})
 }
 

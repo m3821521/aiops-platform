@@ -83,6 +83,66 @@ func (p *Pipeline) Analyze(ctx context.Context, incidentID int64, cluster, names
 	return result, nil
 }
 
+// CollectEvidence 只收集 Evidence，不执行 RCA 分析。
+// 用于 GET /incidents/:id/evidence API，不依赖 RCA 先执行。
+func (p *Pipeline) CollectEvidence(ctx context.Context, incidentID int64, cluster, namespace, service, resourceType, resourceName string, startTime, endTime time.Time) (*EvidenceBundle, error) {
+	incidentCtx, err := p.collectContext(ctx, incidentID, cluster, namespace, service, resourceType, resourceName, startTime, endTime)
+	if err != nil {
+		return nil, err
+	}
+
+	bundle := &EvidenceBundle{
+		IncidentID:   incidentID,
+		Cluster:      cluster,
+		Namespace:    namespace,
+		Service:      service,
+		ResourceType: resourceType,
+		ResourceName: resourceName,
+		TimeWindow: EvidenceTimeWindow{
+			Start:    startTime,
+			End:      endTime,
+			Before:   startTime.Add(-30 * time.Minute),
+		},
+		Alerts:    incidentCtx.Alerts,
+		Anomalies: incidentCtx.Anomalies,
+		Events:    incidentCtx.Events,
+		Metrics:   incidentCtx.Metrics,
+		Logs:      incidentCtx.Logs,
+		Topology:  incidentCtx.Topology,
+		PodResourceState: incidentCtx.PodResourceState,
+	}
+
+	// 统计各数据源状态。
+	bundle.Sources = EvidenceSources{
+		Alerts:    dataSourceStatus(len(incidentCtx.Alerts)),
+		Anomalies: dataSourceStatus(len(incidentCtx.Anomalies)),
+		Events:    dataSourceStatus(len(incidentCtx.Events)),
+		Metrics:   dataSourceStatus(len(incidentCtx.Metrics)),
+		Logs:      dataSourceStatus(len(incidentCtx.Logs)),
+		Topology:  dataSourceStatus(len(incidentCtx.Topology.Nodes)),
+		PodResourceState: podResourceStateStatus(incidentCtx.PodResourceState),
+	}
+
+	// 构建统一时间线。
+	bundle.Timeline = p.buildTimeline(incidentCtx)
+
+	return bundle, nil
+}
+
+func dataSourceStatus(count int) string {
+	if count == 0 {
+		return "no_data"
+	}
+	return "success"
+}
+
+func podResourceStateStatus(state *PodResourceState) string {
+	if state == nil {
+		return "no_data"
+	}
+	return "success"
+}
+
 // collectContext 收集 RCA 上下文。
 func (p *Pipeline) collectContext(ctx context.Context, incidentID int64, cluster, namespace, service, resourceType, resourceName string, startTime, endTime time.Time) (IncidentContext, error) {
 	incidentCtx := IncidentContext{
@@ -106,6 +166,7 @@ func (p *Pipeline) collectContext(ctx context.Context, incidentID int64, cluster
 		metrics   []MetricInfo
 		logs      []LogInfo
 		topology  TopologyInfo
+		podState  *PodResourceState
 	}
 	var res result
 
@@ -147,12 +208,22 @@ func (p *Pipeline) collectContext(ctx context.Context, incidentID int64, cluster
 		slog.Warn("rca: collect topology failed", "err", err)
 	}
 
+	// Pod Resource State：仅当 resourceType == "pod" 时收集。
+	if resourceType == "pod" && resourceName != "" {
+		if podState, err := p.collector.CollectPodResourceState(ctx, cluster, namespace, resourceName); err == nil {
+			res.podState = podState
+		} else {
+			slog.Warn("rca: collect pod resource state failed", "err", err)
+		}
+	}
+
 	incidentCtx.Alerts = res.alerts
 	incidentCtx.Anomalies = res.anomalies
 	incidentCtx.Events = res.events
 	incidentCtx.Metrics = res.metrics
 	incidentCtx.Logs = res.logs
 	incidentCtx.Topology = res.topology
+	incidentCtx.PodResourceState = res.podState
 
 	return incidentCtx, nil
 }

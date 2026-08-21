@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	metricsclientset "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
@@ -110,6 +111,22 @@ func (m *Manager) SetClient(name string, client kubernetes.Interface) {
 	if _, ok := m.clusters[name]; !ok {
 		m.clusters[name] = Cluster{Name: name, Enabled: true, AuthType: AuthKubeconfig}
 	}
+}
+
+// RESTConfig 获取指定集群的 rest.Config（用于 exec/port-forward 等需要 SPDY/WebSocket 的操作）。
+func (m *Manager) RESTConfig(name string) (*rest.Config, error) {
+	if name == "" {
+		list := m.List()
+		if len(list) == 0 {
+			return nil, fmt.Errorf("没有已启用的 Kubernetes 集群")
+		}
+		name = list[0].Name
+	}
+	cluster, err := m.Get(name)
+	if err != nil {
+		return nil, err
+	}
+	return BuildRESTConfig(cluster)
 }
 
 // MetricsClient 获取 metrics clientset（懒加载）。

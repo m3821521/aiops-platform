@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -63,6 +64,79 @@ func (r *Repository) Update(ctx context.Context, wf *Workflow) error {
 
 func (r *Repository) UpdateStatus(ctx context.Context, id int64, status WorkflowStatus) error {
 	return r.db.WithContext(ctx).Model(&Workflow{}).Where("id = ?", id).Update("status", status).Error
+}
+
+// FindStaleRunning 查找超过 threshold 时间仍处于 RUNNING 状态的 Workflow（服务崩溃恢复用）。
+func (r *Repository) FindStaleRunning(ctx context.Context, threshold time.Duration) ([]Workflow, error) {
+	cutoff := time.Now().Add(-threshold)
+	var items []Workflow
+	if err := r.db.WithContext(ctx).Where("status = ? AND updated_at < ?", WorkflowStatusRunning, cutoff).Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+// MarkStaleRunningAsFailed 服务启动时将所有遗留 RUNNING 状态的 Workflow 标记为 FAILED。
+// 同步执行模型下，服务重启意味着之前的 execution goroutine 已消失，无安全 Resume 能力。
+// 因此启动时所有遗留 RUNNING 都视为 interrupted execution。
+// 返回被更新的记录数。
+func (r *Repository) MarkStaleRunningAsFailed(ctx context.Context, threshold time.Duration) (int64, error) {
+	now := time.Now()
+	result := r.db.WithContext(ctx).Model(&Workflow{}).
+		Where("status = ?", WorkflowStatusRunning).
+		Updates(map[string]interface{}{
+			"status":           WorkflowStatusFailed,
+			"finished_at":      now,
+			"error":            "worker crash: stale running workflow recovered on startup",
+			"updated_at":       now,
+			"lease_expires_at": nil,
+		})
+	return result.RowsAffected, result.Error
+}
+
+// RefreshLease 刷新正在执行的 Workflow 的租约过期时间。
+// heartbeat goroutine 定期调用，覆盖整个 Workflow 执行周期（包括 Step 之间和 retry delay）。
+func (r *Repository) RefreshLease(ctx context.Context, id int64, duration time.Duration) error {
+	return r.db.WithContext(ctx).Model(&Workflow{}).
+		Where("id = ? AND status = ?", id, WorkflowStatusRunning).
+		Update("lease_expires_at", time.Now().Add(duration)).Error
+}
+
+// RecoverExpiredLease Runtime Recovery Scanner 调用。
+// 将 lease 已过期的 RUNNING Workflow 标记为 FAILED。
+// 使用 CAS 条件更新，多实例部署下只有一个实例能成功更新同一任务。
+// 返回被更新的记录数。
+func (r *Repository) RecoverExpiredLease(ctx context.Context) (int64, error) {
+	now := time.Now()
+	result := r.db.WithContext(ctx).Model(&Workflow{}).
+		Where("status = ? AND lease_expires_at IS NOT NULL AND lease_expires_at < ?", WorkflowStatusRunning, now).
+		Updates(map[string]interface{}{
+			"status":           WorkflowStatusFailed,
+			"finished_at":      now,
+			"error":            "lease expired: worker crash recovered by runtime scanner",
+			"updated_at":       now,
+			"lease_expires_at": nil,
+		})
+	return result.RowsAffected, result.Error
+}
+
+// UpdateStatusIfRunning CAS 更新 Workflow 最终状态。
+// 仅当当前状态为 running 时才更新，防止 Recovery 覆盖已完成的状态。
+// 返回是否更新成功（RowsAffected == 1）。
+func (r *Repository) UpdateStatusIfRunning(ctx context.Context, id int64, newStatus WorkflowStatus) (bool, error) {
+	now := time.Now()
+	result := r.db.WithContext(ctx).Model(&Workflow{}).
+		Where("id = ? AND status = ?", id, WorkflowStatusRunning).
+		Updates(map[string]interface{}{
+			"status":           newStatus,
+			"finished_at":      now,
+			"updated_at":       now,
+			"lease_expires_at": nil,
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
 }
 
 func (r *Repository) CreateStep(ctx context.Context, step *WorkflowStep) error {

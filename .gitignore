@@ -46,3 +46,4 @@ kubeconfig
 Thumbs.db
 frontend/vite.config.d.ts
 frontend/vite.config.js
+backend/server

@@ -15,6 +15,7 @@ type ContextCollector interface {
 	CollectMetrics(ctx context.Context, cluster, namespace, resourceType, resourceName string, since, until time.Time) ([]MetricInfo, error)
 	CollectLogs(ctx context.Context, cluster, namespace, pod string, since, until time.Time) ([]LogInfo, error)
 	CollectTopology(ctx context.Context, cluster, namespace string) (TopologyInfo, error)
+	CollectPodResourceState(ctx context.Context, cluster, namespace, pod string) (*PodResourceState, error)
 }
 
 // NoopCollector 是一个空实现，用于测试或数据源不可用时。
@@ -37,4 +38,7 @@ func (n *NoopCollector) CollectLogs(ctx context.Context, cluster, namespace, pod
 }
 func (n *NoopCollector) CollectTopology(ctx context.Context, cluster, namespace string) (TopologyInfo, error) {
 	return TopologyInfo{}, nil
+}
+func (n *NoopCollector) CollectPodResourceState(ctx context.Context, cluster, namespace, pod string) (*PodResourceState, error) {
+	return nil, nil
 }

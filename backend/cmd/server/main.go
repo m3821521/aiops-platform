@@ -37,6 +37,7 @@ import (
 	"github.com/aiops/aiops-platform/pkg/logger"
 	"github.com/prometheus/common/model"
 	corev1 "k8s.io/api/core/v1"
+	appsv1 "k8s.io/api/apps/v1"
 )
 
 func main() {
@@ -206,6 +207,7 @@ func main() {
 	mysqlProvider := providers.NewMySQLProvider(credentialService)
 	redisProvider := providers.NewRedisProvider(credentialService)
 	grafanaProvider := providers.NewGrafanaProvider(credentialService)
+	dockerProvider := providers.NewDockerProvider(credentialService)
 
 	if err := providerRegistry.Register(k8sProvider); err != nil {
 		slog.Error("failed to register kubernetes provider", "error", err)
@@ -230,6 +232,9 @@ func main() {
 	}
 	if err := providerRegistry.Register(grafanaProvider); err != nil {
 		slog.Error("failed to register grafana provider", "error", err)
+	}
+	if err := providerRegistry.Register(dockerProvider); err != nil {
+		slog.Error("failed to register docker provider", "error", err)
 	}
 
 	slog.Info("provider registry initialized", "registered_types", providerRegistry.List())
@@ -398,9 +403,10 @@ func main() {
 		slog.Info("ai analysis service initialized")
 	}
 	incidentAIHandler := &ai.IncidentAIHandler{
-		Service:    aiAnalysisService,
-		Repository: aiAnalysisRepo,
-		Enabled:    cfg.AI.Enabled && aiProvider != nil,
+		Service:       aiAnalysisService,
+		Repository:    aiAnalysisRepo,
+		Enabled:       cfg.AI.Enabled && aiProvider != nil,
+		ActionCreator: automation.NewActionCreatorAdapter(automationService, incidentService),
 	}
 
 	// AI Tool Calling Engine（只读工具，依赖 RCA/Topology/Cluster 等服务）。
@@ -475,7 +481,7 @@ func main() {
 		Workflow:        workflowHandler,
 		Jenkins:    &handler.JenkinsHandler{Jenkins: jenkinsClient, Resolver: providerFactory},
 		ArgoCD:     &handler.ArgoCDHandler{ArgoCD: argocdClient, Resolver: providerFactory},
-		Auth:       &handler.AuthHandler{AuthService: authService, UserRepo: userRepo},
+		Auth:       &handler.AuthHandler{AuthService: authService, UserRepo: userRepo, AuditRepo: auditRepo},
 		AuthService: authService,
 		Audit:      &handler.AuditHandler{Repo: auditRepo},
 		Incident:   incidentHandler,
@@ -493,6 +499,28 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	// P1-R1 / P2-02 Reliability: 服务启动时恢复因 Worker 崩溃而遗留的 RUNNING 状态 Action/Workflow。
+	// 同步执行模型下，服务重启意味着之前的 execution goroutine 已消失，无安全 Resume 能力。
+	// 因此启动时所有遗留 RUNNING 都视为 interrupted execution，统一标记为 TIMEOUT/FAILED。
+	recoveryCtx, recoveryCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if recovered, err := automationService.RecoverStaleActions(recoveryCtx, 5*time.Minute); err != nil {
+		slog.Error("recover stale actions failed", "error", err)
+	} else if recovered > 0 {
+		slog.Info("recovered stale actions on startup", "count", recovered)
+	}
+	if recovered, err := workflowService.RecoverStaleExecutions(recoveryCtx, 5*time.Minute); err != nil {
+		slog.Error("recover stale workflows failed", "error", err)
+	} else if recovered > 0 {
+		slog.Info("recovered stale workflows on startup", "count", recovered)
+	}
+	recoveryCancel()
+
+	// P2-02: 启动 Runtime Recovery Scanner，定期扫描 lease 已过期的 RUNNING 任务。
+	// heartbeat 机制保证正常执行的任务 lease 持续刷新，不会被误恢复。
+	scannerCtx, scannerCancel := context.WithCancel(context.Background())
+	automationService.StartRecoveryScanner(scannerCtx)
+	workflowService.StartRecoveryScanner(scannerCtx)
+
 	// 后台启动 HTTP 服务。
 	go func() {
 		slog.Info("aiops-platform started", "addr", addr, "clusters", len(clusters))
@@ -507,6 +535,9 @@ func main() {
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	<-quit
 	slog.Info("shutting down...")
+
+	// 停止 Runtime Recovery Scanner。
+	scannerCancel()
 
 	// 最多等 30 秒让在途请求处理完，超时强制退出。
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -714,37 +745,143 @@ func (c *rcaContextCollector) CollectMetrics(ctx context.Context, cluster, names
 	if c.querier == nil || resourceName == "" {
 		return nil, nil
 	}
+
 	var metrics []rca.MetricInfo
+
 	// 根据资源类型选择指标查询。
-	queries := map[string]string{}
-	if resourceType == "pod" {
-		queries["container_cpu"] = fmt.Sprintf(`rate(container_cpu_usage_seconds_total{pod="%s",namespace="%s"}[5m])`, resourceName, namespace)
-		queries["container_memory"] = fmt.Sprintf(`container_memory_usage_bytes{pod="%s",namespace="%s"}`, resourceName, namespace)
-		queries["container_restart"] = fmt.Sprintf(`kube_pod_container_status_restarts_total{pod="%s",namespace="%s"}`, resourceName, namespace)
-	} else if resourceType == "node" {
-		queries["node_cpu"] = fmt.Sprintf(`100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle",instance=~"%s.*"}[5m])) * 100)`, resourceName)
-		queries["node_memory"] = fmt.Sprintf(`(1 - node_memory_MemAvailable_bytes{instance=~"%s.*"} / node_memory_MemTotal_bytes{instance=~"%s.*"}) * 100`, resourceName, resourceName)
+	type metricQuery struct {
+		name string
+		unit string
+		expr string
 	}
-	for name, promQL := range queries {
-		result, err := c.querier.Query(ctx, promQL, until)
+	var queries []metricQuery
+
+	if resourceType == "pod" {
+		queries = []metricQuery{
+			{
+				name: "container_cpu_usage",
+				unit: "cores",
+				expr: fmt.Sprintf(`rate(container_cpu_usage_seconds_total{pod="%s",namespace="%s",container!="",container!="POD"}[5m])`, resourceName, namespace),
+			},
+			{
+				name: "container_memory_working_set",
+				unit: "bytes",
+				expr: fmt.Sprintf(`container_memory_working_set_bytes{pod="%s",namespace="%s",container!="",container!="POD"}`, resourceName, namespace),
+			},
+			{
+				name: "container_restart_count",
+				unit: "count",
+				expr: fmt.Sprintf(`kube_pod_container_status_restarts_total{pod="%s",namespace="%s"}`, resourceName, namespace),
+			},
+			{
+				name: "up",
+				unit: "status",
+				expr: fmt.Sprintf(`up{pod="%s",namespace="%s"}`, resourceName, namespace),
+			},
+		}
+	} else if resourceType == "node" {
+		queries = []metricQuery{
+			{
+				name: "node_cpu_usage",
+				unit: "percent",
+				expr: fmt.Sprintf(`100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle",instance=~"%s.*"}[5m])) * 100)`, resourceName),
+			},
+			{
+				name: "node_memory_usage",
+				unit: "percent",
+				expr: fmt.Sprintf(`(1 - node_memory_MemAvailable_bytes{instance=~"%s.*"} / node_memory_MemTotal_bytes{instance=~"%s.*"}) * 100`, resourceName, resourceName),
+			},
+		}
+	}
+
+	// 时间范围：Before 30min ~ After 15min（如果 Incident 已结束）
+	queryStart := since
+	queryEnd := until
+	if queryEnd.Before(queryStart) {
+		queryEnd = time.Now().UTC()
+	}
+	// 扩展查询范围以包含 After 数据
+	queryEndExtended := queryEnd.Add(15 * time.Minute)
+	if queryEndExtended.After(time.Now().UTC().Add(5 * time.Minute)) {
+		queryEndExtended = time.Now().UTC()
+	}
+
+	// 根据时间范围设置 step
+	duration := queryEndExtended.Sub(queryStart)
+	step := 30 * time.Second
+	if duration > 2*time.Hour {
+		step = 1 * time.Minute
+	}
+	if duration > 6*time.Hour {
+		step = 5 * time.Minute
+	}
+
+	for _, q := range queries {
+		result, err := c.querier.QueryRange(ctx, q.expr, queryStart, queryEndExtended, step)
 		if err != nil {
-			continue // 单个指标失败不阻塞。
+			slog.Warn("rca: metric query_range failed", "metric", q.name, "err", err)
+			continue
 		}
 		if result == nil {
 			continue
 		}
-		// 解析 vector 结果。
-		if vec, ok := result.Result.([]model.Sample); ok {
-			for _, s := range vec {
+
+		// 解析 matrix 结果（时间序列）
+		if matrix, ok := result.Result.(model.Matrix); ok {
+			for _, sampleStream := range matrix {
+				if len(sampleStream.Values) == 0 {
+					continue
+				}
+
+				// 提取 labels
+				labels := make(map[string]string)
+				for k, v := range sampleStream.Metric {
+					labels[string(k)] = string(v)
+				}
+
+				// 按 Incident 时间分段
+				var before, during, after []rca.MetricDataPoint
+				var latestValue float64
+				var latestTimestamp time.Time
+
+				for _, vp := range sampleStream.Values {
+					ts := vp.Timestamp.Time()
+					val := float64(vp.Value)
+					dp := rca.MetricDataPoint{Timestamp: ts, Value: val}
+
+					if ts.Before(since) {
+						before = append(before, dp)
+					} else if ts.After(until) && !until.IsZero() {
+						after = append(after, dp)
+					} else {
+						during = append(during, dp)
+					}
+
+					if ts.After(latestTimestamp) {
+						latestTimestamp = ts
+						latestValue = val
+					}
+				}
+
+				if latestTimestamp.IsZero() {
+					continue
+				}
+
 				metrics = append(metrics, rca.MetricInfo{
-					Metric:    name,
-					Value:     float64(s.Value),
-					Timestamp: s.Timestamp.Time(),
+					Metric:    q.name,
+					Value:     latestValue,
+					Timestamp: latestTimestamp,
 					Resource:  resourceName,
+					Unit:      q.unit,
+					Labels:    labels,
+					Before:    before,
+					During:    during,
+					After:     after,
 				})
 			}
 		}
 	}
+
 	return metrics, nil
 }
 
@@ -752,10 +889,10 @@ func (c *rcaContextCollector) CollectLogs(ctx context.Context, cluster, namespac
 	if c.esClient == nil || pod == "" {
 		return nil, nil
 	}
+	// Evidence 收集不限制日志级别，返回所有匹配的日志（INFO/WARN/ERROR 都可能包含根因线索）。
 	result, err := c.esClient.Search(ctx, logging.SearchQuery{
 		Namespace: namespace,
 		Pod:       pod,
-		Level:     "error",
 		Start:     since,
 		End:       until,
 		Size:      50,
@@ -802,6 +939,96 @@ func (c *rcaContextCollector) CollectTopology(ctx context.Context, cluster, name
 		})
 	}
 	return info, nil
+}
+
+// CollectPodResourceState 收集 Pod 的实时 Kubernetes 资源状态。
+func (c *rcaContextCollector) CollectPodResourceState(ctx context.Context, cluster, namespace, pod string) (*rca.PodResourceState, error) {
+	if c.clusterSvc == nil || pod == "" {
+		return nil, nil
+	}
+	p, err := c.clusterSvc.GetPod(ctx, cluster, namespace, pod)
+	if err != nil {
+		return nil, err
+	}
+
+	state := &rca.PodResourceState{
+		Namespace:   namespace,
+		Pod:         pod,
+		Phase:       string(p.Status.Phase),
+		NodeName:    p.Spec.NodeName,
+		PodIP:       p.Status.PodIP,
+		HostIP:      p.Status.HostIP,
+		Containers:  make([]rca.PodContainerState, 0, len(p.Status.ContainerStatuses)),
+		Conditions:  make([]rca.PodCondition, 0, len(p.Status.Conditions)),
+	}
+
+	if p.Status.StartTime != nil {
+		state.StartTime = p.Status.StartTime.Time.Format(time.RFC3339)
+	}
+
+	// 计算总体 Ready 和总 RestartCount。
+	totalRestart := int32(0)
+	allReady := len(p.Status.ContainerStatuses) > 0
+	for _, cs := range p.Status.ContainerStatuses {
+		totalRestart += cs.RestartCount
+		if !cs.Ready {
+			allReady = false
+		}
+		containerState := rca.PodContainerState{
+			Name:         cs.Name,
+			Ready:        cs.Ready,
+			RestartCount: cs.RestartCount,
+		}
+		// 当前状态。
+		if cs.State.Running != nil {
+			containerState.State = "running"
+			containerState.StartedAt = cs.State.Running.StartedAt.Time.Format(time.RFC3339)
+		} else if cs.State.Waiting != nil {
+			containerState.State = "waiting"
+			containerState.Reason = cs.State.Waiting.Reason
+			containerState.Message = cs.State.Waiting.Message
+		} else if cs.State.Terminated != nil {
+			containerState.State = "terminated"
+			containerState.Reason = cs.State.Terminated.Reason
+			containerState.ExitCode = &cs.State.Terminated.ExitCode
+			sig := cs.State.Terminated.Signal
+			containerState.Signal = &sig
+			if !cs.State.Terminated.StartedAt.IsZero() {
+				containerState.StartedAt = cs.State.Terminated.StartedAt.Time.Format(time.RFC3339)
+			}
+			if !cs.State.Terminated.FinishedAt.IsZero() {
+				containerState.FinishedAt = cs.State.Terminated.FinishedAt.Time.Format(time.RFC3339)
+			}
+		} else {
+			containerState.State = "unknown"
+		}
+		// 上一次状态。
+		if cs.LastTerminationState.Terminated != nil {
+			containerState.LastState = "terminated"
+			containerState.LastReason = cs.LastTerminationState.Terminated.Reason
+			containerState.LastExitCode = &cs.LastTerminationState.Terminated.ExitCode
+		} else if cs.LastTerminationState.Waiting != nil {
+			containerState.LastState = "waiting"
+			containerState.LastReason = cs.LastTerminationState.Waiting.Reason
+		} else if cs.LastTerminationState.Running != nil {
+			containerState.LastState = "running"
+		}
+		state.Containers = append(state.Containers, containerState)
+	}
+	state.Ready = allReady
+	state.RestartCount = totalRestart
+
+	// Conditions。
+	for _, cond := range p.Status.Conditions {
+		state.Conditions = append(state.Conditions, rca.PodCondition{
+			Type:    string(cond.Type),
+			Status:  string(cond.Status),
+			Reason:  cond.Reason,
+			Message: cond.Message,
+		})
+	}
+
+	return state, nil
 }
 
 // aiContextProvider 是 ai.AIContextProvider 接口的适配器。
@@ -859,14 +1086,16 @@ func (p *aiContextProvider) BuildContext(ctx context.Context, incidentID int64) 
 	if signals, err := p.incidentRepo.ListSignals(ctx, incidentID); err == nil {
 		for _, s := range signals {
 			if s.SignalType == "alert" {
-				aiCtx.Alerts = append(aiCtx.Alerts, ai.AlertSummary{
+				summary := ai.AlertSummary{
 					Name:      s.Title,
 					Severity:  s.Severity,
 					Service:   s.Service,
 					Pod:       s.ResourceName,
 					Namespace: s.Namespace,
 					StartsAt:  s.Timestamp,
-				})
+				}
+				summary.ID = ai.GenerateEvidenceID(incidentID, "alerts", "alert", s.ResourceName, s.Timestamp, s.Title)
+				aiCtx.Alerts = append(aiCtx.Alerts, summary)
 			}
 		}
 		aiCtx.DataSources.AlertsAvailable = len(aiCtx.Alerts) > 0
@@ -876,7 +1105,7 @@ func (p *aiContextProvider) BuildContext(ctx context.Context, incidentID int64) 
 	if p.anomalyRepo != nil && inc.ResourceName != "" {
 		if anomalies, err := p.anomalyRepo.FindByResource(ctx, inc.Cluster, inc.ResourceType, inc.ResourceName, since); err == nil {
 			for _, a := range anomalies {
-				aiCtx.Anomalies = append(aiCtx.Anomalies, ai.AnomalySummary{
+				summary := ai.AnomalySummary{
 					Metric:       a.Metric,
 					ResourceType: a.ResourceType,
 					ResourceName: a.ResourceName,
@@ -887,7 +1116,9 @@ func (p *aiContextProvider) BuildContext(ctx context.Context, incidentID int64) 
 					Algorithm:    a.Algorithm,
 					Reason:       a.Reason,
 					Timestamp:    a.Timestamp,
-				})
+				}
+				summary.ID = ai.GenerateEvidenceID(incidentID, "anomalies", "anomaly", a.ResourceName, a.Timestamp, a.Metric)
+				aiCtx.Anomalies = append(aiCtx.Anomalies, summary)
 			}
 			aiCtx.DataSources.AnomaliesAvailable = len(aiCtx.Anomalies) > 0
 		}
@@ -900,12 +1131,14 @@ func (p *aiContextProvider) BuildContext(ctx context.Context, incidentID int64) 
 			if result, err := p.querier.Query(ctx, promQL, endTime); err == nil && result != nil {
 				if vec, ok := result.Result.([]model.Sample); ok {
 					for _, s := range vec {
-						aiCtx.Metrics = append(aiCtx.Metrics, ai.MetricSummary{
+						summary := ai.MetricSummary{
 							Metric:    name,
 							Value:     float64(s.Value),
 							Resource:  inc.ResourceName,
 							Timestamp: s.Timestamp.Time(),
-						})
+						}
+						summary.ID = ai.GenerateEvidenceID(incidentID, "metrics", "metric", inc.ResourceName, s.Timestamp.Time(), name)
+						aiCtx.Metrics = append(aiCtx.Metrics, summary)
 					}
 				}
 			}
@@ -924,13 +1157,15 @@ func (p *aiContextProvider) BuildContext(ctx context.Context, incidentID int64) 
 			Size:      30,
 		}); err == nil {
 			for _, hit := range result.Hits {
-				aiCtx.Logs = append(aiCtx.Logs, ai.LogSummary{
+				summary := ai.LogSummary{
 					Timestamp: hit.Timestamp,
 					Level:     hit.Level,
 					Message:   hit.Message,
 					Pod:       hit.Pod,
 					Namespace: hit.Namespace,
-				})
+				}
+				summary.ID = ai.GenerateEvidenceID(incidentID, "logs", "log", hit.Pod, hit.Timestamp, hit.Message)
+				aiCtx.Logs = append(aiCtx.Logs, summary)
 			}
 			aiCtx.DataSources.LogsAvailable = len(aiCtx.Logs) > 0
 		}
@@ -948,7 +1183,7 @@ func (p *aiContextProvider) BuildContext(ctx context.Context, incidentID int64) 
 			if e.LastTimestamp.Time.Before(since) {
 				continue
 			}
-			aiCtx.Events = append(aiCtx.Events, ai.EventSummary{
+			summary := ai.EventSummary{
 				Type:         e.Type,
 				Reason:       e.Reason,
 				Message:      e.Message,
@@ -957,7 +1192,9 @@ func (p *aiContextProvider) BuildContext(ctx context.Context, incidentID int64) 
 				Namespace:    inc.Namespace,
 				Timestamp:    e.LastTimestamp.Time,
 				Count:        e.Count,
-			})
+			}
+			summary.ID = ai.GenerateEvidenceID(incidentID, "events", "event", inc.ResourceName, e.LastTimestamp.Time, e.Reason)
+			aiCtx.Events = append(aiCtx.Events, summary)
 		}
 		aiCtx.DataSources.EventsAvailable = len(aiCtx.Events) > 0
 	}
@@ -992,7 +1229,197 @@ func (p *aiContextProvider) BuildContext(ctx context.Context, incidentID int64) 
 		}
 	}
 
+	// 9. 获取 Pod Diagnostic（Kubernetes 诊断信息）。
+	if p.clusterSvc != nil && inc.ResourceType == "pod" && inc.ResourceName != "" {
+		if pod, err := p.clusterSvc.GetPod(ctx, inc.Cluster, inc.Namespace, inc.ResourceName); err == nil && pod != nil {
+			diag := &ai.PodDiagnosticSummary{
+				Namespace:    inc.Namespace,
+				Pod:          inc.ResourceName,
+				PodUID:       string(pod.UID),
+				Phase:        string(pod.Status.Phase),
+				Ready:        isPodReady(pod),
+				RestartCount: getPodRestartCount(pod),
+				NodeName:     pod.Spec.NodeName,
+			}
+			if pod.Status.StartTime != nil {
+				diag.StartTime = pod.Status.StartTime.Format(time.RFC3339)
+			}
+			for _, cs := range pod.Status.ContainerStatuses {
+				containerDiag := ai.PodContainerDiagnostic{
+					Name:         cs.Name,
+					Ready:        cs.Ready,
+					RestartCount: cs.RestartCount,
+					State:        getContainerState(cs.State),
+				}
+				if cs.State.Waiting != nil {
+					containerDiag.Reason = cs.State.Waiting.Reason
+					containerDiag.Message = cs.State.Waiting.Message
+				}
+				if cs.State.Terminated != nil {
+					containerDiag.Reason = cs.State.Terminated.Reason
+					containerDiag.Message = cs.State.Terminated.Message
+					containerDiag.ExitCode = &cs.State.Terminated.ExitCode
+					if !cs.State.Terminated.StartedAt.IsZero() {
+						containerDiag.StartedAt = cs.State.Terminated.StartedAt.Format(time.RFC3339)
+					}
+					if !cs.State.Terminated.FinishedAt.IsZero() {
+						containerDiag.FinishedAt = cs.State.Terminated.FinishedAt.Format(time.RFC3339)
+					}
+				}
+				if cs.State.Running != nil && !cs.State.Running.StartedAt.IsZero() {
+					containerDiag.StartedAt = cs.State.Running.StartedAt.Format(time.RFC3339)
+				}
+				if cs.LastTerminationState.Terminated != nil {
+					containerDiag.LastState = "terminated"
+					containerDiag.LastReason = cs.LastTerminationState.Terminated.Reason
+					containerDiag.LastExitCode = &cs.LastTerminationState.Terminated.ExitCode
+					if !cs.LastTerminationState.Terminated.StartedAt.IsZero() {
+						containerDiag.LastStartedAt = cs.LastTerminationState.Terminated.StartedAt.Format(time.RFC3339)
+					}
+					if !cs.LastTerminationState.Terminated.FinishedAt.IsZero() {
+						containerDiag.LastFinishedAt = cs.LastTerminationState.Terminated.FinishedAt.Format(time.RFC3339)
+					}
+				} else if cs.LastTerminationState.Waiting != nil {
+					containerDiag.LastState = "waiting"
+					containerDiag.LastReason = cs.LastTerminationState.Waiting.Reason
+				}
+				diag.Containers = append(diag.Containers, containerDiag)
+			}
+			// 生成 Evidence ID（包含 PodUID 确保 Historical State 可关联）
+			diag.ID = ai.GenerateEvidenceID(incidentID, "pod_diagnostic", "pod_state", inc.ResourceName, time.Now(), fmt.Sprintf("%s-%s-%d-%s", diag.PodUID, diag.Phase, diag.RestartCount, diag.NodeName))
+			aiCtx.PodDiagnostic = diag
+		}
+	}
+
+	// 10. 获取 Deployment Diagnostic（Kubernetes 诊断信息）。
+	if p.clusterSvc != nil && inc.ResourceType == "deployment" && inc.ResourceName != "" {
+		if dep, err := p.clusterSvc.GetDeployment(ctx, inc.Cluster, inc.Namespace, inc.ResourceName); err == nil && dep != nil {
+			diag := &ai.DeploymentDiagnosticSummary{
+				Namespace:           inc.Namespace,
+				Deployment:          inc.ResourceName,
+				Replicas:            *dep.Spec.Replicas,
+				AvailableReplicas:   dep.Status.AvailableReplicas,
+				ReadyReplicas:       dep.Status.ReadyReplicas,
+				UpdatedReplicas:     dep.Status.UpdatedReplicas,
+				UnavailableReplicas: dep.Status.UnavailableReplicas,
+			}
+			// 获取 Deployment condition
+			for _, cond := range dep.Status.Conditions {
+				if cond.Type == appsv1.DeploymentAvailable {
+					diag.Condition = string(cond.Type)
+					diag.ConditionReason = cond.Reason
+					diag.ConditionMessage = cond.Message
+					break
+				}
+			}
+			// 生成 Evidence ID
+			diag.ID = ai.GenerateEvidenceID(incidentID, "deployment_diagnostic", "deployment_state", inc.ResourceName, time.Now(), fmt.Sprintf("%d-%d-%d", diag.Replicas, diag.AvailableReplicas, diag.ReadyReplicas))
+			aiCtx.DeploymentDiagnostic = diag
+		}
+	}
+
+	// 11. 获取 Service Diagnostic（Kubernetes 诊断信息）。
+	if p.clusterSvc != nil && inc.ResourceType == "service" && inc.ResourceName != "" {
+		svc, err := p.clusterSvc.GetService(ctx, inc.Cluster, inc.Namespace, inc.ResourceName)
+		if err == nil && svc != nil {
+			diag := &ai.ServiceDiagnosticSummary{
+				Namespace:   inc.Namespace,
+				ServiceName: inc.ResourceName,
+				ServiceType: string(svc.Spec.Type),
+				ClusterIP:   svc.Spec.ClusterIP,
+				Selector:    svc.Spec.Selector,
+			}
+			// 端口信息
+			for _, port := range svc.Spec.Ports {
+				diag.Ports = append(diag.Ports, ai.ServicePortInfo{
+					Name:       port.Name,
+					Port:       port.Port,
+					TargetPort: port.TargetPort.String(),
+					Protocol:   string(port.Protocol),
+				})
+			}
+			// Endpoints 信息
+			if ep, err := p.clusterSvc.GetEndpoints(ctx, inc.Cluster, inc.Namespace, inc.ResourceName); err == nil && ep != nil {
+				for _, subset := range ep.Subsets {
+					diag.EndpointCount += int32(len(subset.Addresses))
+					diag.ReadyEndpointCount += int32(len(subset.Addresses))
+					for _, addr := range subset.Addresses {
+						diag.EndpointAddresses = append(diag.EndpointAddresses, addr.IP)
+					}
+					// NotReadyAddresses 不计入 ready
+					diag.EndpointCount += int32(len(subset.NotReadyAddresses))
+				}
+			}
+			// 通过 selector 匹配 Pod（内存匹配，避免 N+1 查询）
+			if pods, err := p.clusterSvc.ListPods(ctx, inc.Cluster, inc.Namespace); err == nil {
+				for i := range pods {
+					pod := &pods[i]
+					// 检查 selector 是否匹配
+					matched := true
+					for k, v := range svc.Spec.Selector {
+						if pod.Labels[k] != v {
+							matched = false
+							break
+						}
+					}
+					if matched {
+						diag.MatchedPodCount++
+						if isPodReady(pod) {
+							diag.ReadyMatchedPodCount++
+						}
+					}
+				}
+			}
+			// 判断 selector_match_status
+			if diag.MatchedPodCount == 0 {
+				diag.SelectorMatchStatus = "no_pods_matched"
+			} else if diag.ReadyMatchedPodCount == 0 {
+				diag.SelectorMatchStatus = "no_ready_pods"
+			} else if diag.EndpointCount == 0 {
+				diag.SelectorMatchStatus = "no_endpoints"
+			} else {
+				diag.SelectorMatchStatus = "matched"
+			}
+			// 生成 Evidence ID
+			diag.ID = ai.GenerateEvidenceID(incidentID, "service_diagnostic", "service_state", inc.ResourceName, time.Now(), fmt.Sprintf("%s-%d-%d-%d", diag.SelectorMatchStatus, diag.MatchedPodCount, diag.ReadyMatchedPodCount, diag.EndpointCount))
+			aiCtx.ServiceDiagnostic = diag
+		}
+	}
+
 	return aiCtx, nil
+}
+
+// isPodReady 检查 Pod 是否 Ready。
+func isPodReady(pod *corev1.Pod) bool {
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+// getPodRestartCount 获取 Pod 总重启次数。
+func getPodRestartCount(pod *corev1.Pod) int32 {
+	var total int32
+	for _, cs := range pod.Status.ContainerStatuses {
+		total += cs.RestartCount
+	}
+	return total
+}
+
+// getContainerState 获取容器状态字符串。
+func getContainerState(state corev1.ContainerState) string {
+	if state.Running != nil {
+		return "running"
+	}
+	if state.Waiting != nil {
+		return "waiting"
+	}
+	if state.Terminated != nil {
+		return "terminated"
+	}
+	return "unknown"
 }
 
 // buildMetricQueries 根据资源类型构建 PromQL 查询。

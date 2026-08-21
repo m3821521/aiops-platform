@@ -4,9 +4,10 @@ import {
 } from 'antd'
 import {
   PlayCircleOutlined, CheckCircleOutlined, CloseCircleOutlined,
-  ThunderboltOutlined, ApartmentOutlined,
+  ThunderboltOutlined, ApartmentOutlined, HistoryOutlined,
 } from '@ant-design/icons'
-import { workflowApi, type Workflow } from '@/api/workflow'
+import { workflowApi, type Workflow, type WorkflowExecution } from '@/api/workflow'
+import WorkflowExecutionDetail from './WorkflowExecutionDetail'
 
 const statusColor: Record<string, string> = {
   draft: 'default',
@@ -41,6 +42,12 @@ export default function Workflows() {
   const [pageSize, setPageSize] = useState(20)
   const [detail, setDetail] = useState<Workflow | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
+  const [execHistoryOpen, setExecHistoryOpen] = useState(false)
+  const [execHistory, setExecHistory] = useState<WorkflowExecution[]>([])
+  const [execHistoryTotal, setExecHistoryTotal] = useState(0)
+  const [execHistoryLoading, setExecHistoryLoading] = useState(false)
+  const [execHistoryPage, setExecHistoryPage] = useState(1)
+  const [execDetailId, setExecDetailId] = useState<number | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -65,6 +72,30 @@ export default function Workflows() {
     } catch (e: any) {
       message.error('加载工作流详情失败: ' + (e?.message || ''))
     }
+  }
+
+  const loadExecHistory = useCallback(async (workflowId: number) => {
+    setExecHistoryLoading(true)
+    try {
+      const res = await workflowApi.listExecutions(workflowId, { page: execHistoryPage, page_size: 20 })
+      setExecHistory(res.items)
+      setExecHistoryTotal(res.total)
+    } catch (e: any) {
+      message.error('加载执行历史失败: ' + (e?.message || ''))
+    } finally {
+      setExecHistoryLoading(false)
+    }
+  }, [execHistoryPage])
+
+  const openExecHistory = (wf: Workflow) => {
+    setDetail(wf)
+    setExecHistoryPage(1)
+    setExecHistoryOpen(true)
+    loadExecHistory(wf.id)
+  }
+
+  const openExecDetail = (execId: number) => {
+    setExecDetailId(execId)
   }
 
   const handleSubmit = async (id: number) => {
@@ -133,6 +164,7 @@ export default function Workflows() {
       render: (_: any, record: Workflow) => (
         <Space size={4}>
           <Button size="small" type="link" onClick={() => openDetail(record)}>详情</Button>
+          <Button size="small" type="link" icon={<HistoryOutlined />} onClick={() => openExecHistory(record)}>执行历史</Button>
           {record.status === 'draft' && <Button size="small" type="link" onClick={() => handleSubmit(record.id)}>提交</Button>}
           {record.status === 'pending_approval' && <Button size="small" type="link" onClick={() => handleApprove(record.id)}>审批</Button>}
           {record.status === 'approved' && <Button size="small" type="link" danger onClick={() => handleExecute(record.id)}>执行</Button>}
@@ -181,6 +213,7 @@ export default function Workflows() {
               {detail.status === 'draft' && <Button onClick={() => handleSubmit(detail.id)}>提交审批</Button>}
               {detail.status === 'pending_approval' && <Button type="primary" onClick={() => handleApprove(detail.id)}>审批通过</Button>}
               {detail.status === 'approved' && <Button type="primary" danger icon={<PlayCircleOutlined />} onClick={() => handleExecute(detail.id)}>执行</Button>}
+              <Button icon={<HistoryOutlined />} onClick={() => openExecHistory(detail)}>执行历史</Button>
               {(detail.status === 'draft' || detail.status === 'pending_approval' || detail.status === 'approved') && (
                 <Button onClick={() => {
                   Modal.confirm({
@@ -217,6 +250,54 @@ export default function Workflows() {
           </div>
         )}
       </Drawer>
+
+      {/* Execution History Drawer */}
+      <Drawer
+        title={detail ? `执行历史 · ${detail.name}` : '执行历史'}
+        width={640}
+        open={execHistoryOpen}
+        onClose={() => setExecHistoryOpen(false)}
+        destroyOnClose
+        extra={<Button size="small" icon={<HistoryOutlined />} onClick={() => detail && loadExecHistory(detail.id)}>刷新</Button>}
+      >
+        <Table
+          rowKey="id"
+          size="small"
+          loading={execHistoryLoading}
+          dataSource={execHistory}
+          pagination={{
+            current: execHistoryPage,
+            pageSize: 20,
+            total: execHistoryTotal,
+            showSizeChanger: false,
+            onChange: (p) => { setExecHistoryPage(p); if (detail) loadExecHistory(detail.id) },
+          }}
+          columns={[
+            { title: 'ID', dataIndex: 'id', width: 70, render: (id: number) => <span style={{ fontFamily: 'monospace' }}>#{id}</span> },
+            {
+              title: '状态', dataIndex: 'status', width: 100,
+              render: (s: string) => <Badge color={statusColor[s] || 'default'} text={s} />,
+            },
+            { title: '触发方式', dataIndex: 'trigger_type', width: 90, render: (t: string) => t || 'manual' },
+            { title: '开始时间', dataIndex: 'started_at', width: 170, render: (t: string) => t ? new Date(t).toLocaleString() : '-' },
+            { title: '耗时', dataIndex: 'duration_ms', width: 90, render: (ms: number) => ms > 0 ? `${(ms / 1000).toFixed(1)}s` : '-' },
+            {
+              title: '操作', width: 80,
+              render: (_: any, record: WorkflowExecution) => (
+                <Button type="link" size="small" onClick={() => openExecDetail(record.id)}>查看</Button>
+              ),
+            },
+          ]}
+          locale={{ emptyText: <Empty description="暂无执行记录" /> }}
+        />
+      </Drawer>
+
+      {/* Execution Detail Drawer */}
+      <WorkflowExecutionDetail
+        executionId={execDetailId}
+        workflowName={detail?.name}
+        onClose={() => setExecDetailId(null)}
+      />
     </div>
   )
 }

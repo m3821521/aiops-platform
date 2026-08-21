@@ -90,6 +90,69 @@ func (r *ActionRepository) FindRunningByTarget(ctx context.Context, targetType, 
 	return &action, nil
 }
 
+// MarkStaleRunningAsTimeout 服务启动时将所有遗留 RUNNING 状态的 Action 标记为 TIMEOUT。
+// 同步执行模型下，服务重启意味着之前的 execution goroutine 已消失，无安全 Resume 能力。
+// 因此启动时所有遗留 RUNNING 都视为 interrupted execution。
+// 返回被更新的记录数。
+func (r *ActionRepository) MarkStaleRunningAsTimeout(ctx context.Context, threshold time.Duration) (int64, error) {
+	now := time.Now()
+	result := r.db.WithContext(ctx).Model(&Action{}).
+		Where("status = ?", StatusRunning).
+		Updates(map[string]interface{}{
+			"status":         StatusTimeout,
+			"finished_at":    now,
+			"reject_reason":  "worker crash: stale running action recovered on startup",
+			"updated_at":     now,
+			"lease_expires_at": nil,
+		})
+	return result.RowsAffected, result.Error
+}
+
+// RefreshLease 刷新正在执行的 Action 的租约过期时间。
+// heartbeat goroutine 定期调用，防止任务被 Recovery Scanner 误恢复。
+func (r *ActionRepository) RefreshLease(ctx context.Context, id int64, duration time.Duration) error {
+	return r.db.WithContext(ctx).Model(&Action{}).
+		Where("id = ? AND status = ?", id, StatusRunning).
+		Update("lease_expires_at", time.Now().Add(duration)).Error
+}
+
+// RecoverExpiredLease Runtime Recovery Scanner 调用。
+// 将 lease 已过期的 RUNNING Action 标记为 TIMEOUT。
+// 使用 CAS 条件更新，多实例部署下只有一个实例能成功更新同一任务。
+// 返回被更新的记录数。
+func (r *ActionRepository) RecoverExpiredLease(ctx context.Context) (int64, error) {
+	now := time.Now()
+	result := r.db.WithContext(ctx).Model(&Action{}).
+		Where("status = ? AND lease_expires_at IS NOT NULL AND lease_expires_at < ?", StatusRunning, now).
+		Updates(map[string]interface{}{
+			"status":          StatusTimeout,
+			"finished_at":     now,
+			"reject_reason":   "lease expired: worker crash recovered by runtime scanner",
+			"updated_at":      now,
+			"lease_expires_at": nil,
+		})
+	return result.RowsAffected, result.Error
+}
+
+// UpdateStatusIfRunning CAS 更新 Action 最终状态。
+// 仅当当前状态为 running 时才更新，防止 Recovery 覆盖已完成的状态。
+// 返回是否更新成功（RowsAffected == 1）。
+func (r *ActionRepository) UpdateStatusIfRunning(ctx context.Context, id int64, newStatus ActionStatus) (bool, error) {
+	now := time.Now()
+	result := r.db.WithContext(ctx).Model(&Action{}).
+		Where("id = ? AND status = ?", id, StatusRunning).
+		Updates(map[string]interface{}{
+			"status":          newStatus,
+			"finished_at":     now,
+			"updated_at":      now,
+			"lease_expires_at": nil,
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
 // ExecutionRepository 是 ActionExecution 的 Repository。
 type ExecutionRepository struct {
 	db *gorm.DB

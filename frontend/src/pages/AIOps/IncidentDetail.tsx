@@ -2,13 +2,13 @@ import { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Drawer, Tabs, Descriptions, Tag, Spin, Timeline, Empty, Button, Space,
-  Modal, message, Badge, Card, Alert,
+  Modal, message, Badge, Card, Alert, Table,
 } from 'antd'
 import {
   CheckCircleOutlined, StopOutlined, CloseCircleOutlined,
   AlertOutlined, FireOutlined, InfoCircleOutlined,
 } from '@ant-design/icons'
-import { incidentApi } from '@/api/incident'
+import { incidentApi, type EvidenceBundle } from '@/api/incident'
 import { topologyApi } from '@/api/topology'
 import { rcaApi } from '@/api/rca'
 import { aiAnalysisApi } from '@/api/aiAnalysis'
@@ -71,6 +71,8 @@ export default function IncidentDetail({ id, open, onClose, onChanged }: Props) 
   const [rcaLoading, setRcaLoading] = useState(false)
   const [aiResult, setAiResult] = useState<AIAnalysisResult | null>(null)
   const [aiLoading, setAiLoading] = useState(false)
+  const [evidence, setEvidence] = useState<EvidenceBundle | null>(null)
+  const [evidenceLoading, setEvidenceLoading] = useState(false)
 
   const fetchDetail = useCallback(async () => {
     if (!id) return
@@ -164,6 +166,23 @@ export default function IncidentDetail({ id, open, onClose, onChanged }: Props) 
         setAiResult(null)
       } finally {
         setAiLoading(false)
+      }
+    }
+    load()
+  }, [tab, id])
+
+  // 加载 Evidence（切换到 evidence tab 时）
+  useEffect(() => {
+    if (tab !== 'evidence' || !id) return
+    setEvidenceLoading(true)
+    const load = async () => {
+      try {
+        const res = await incidentApi.evidence(id)
+        setEvidence(res)
+      } catch {
+        setEvidence(null)
+      } finally {
+        setEvidenceLoading(false)
       }
     }
     load()
@@ -622,21 +641,66 @@ export default function IncidentDetail({ id, open, onClose, onChanged }: Props) 
 
         {/* Evidence */}
         {aiResult.evidence && aiResult.evidence.length > 0 && (
-          <Card title={`证据 (${aiResult.evidence.length})`} size="small" style={{ marginBottom: 12 }}>
+          <Card title={`支撑证据 (${aiResult.evidence.length})`} size="small" style={{ marginBottom: 12 }}>
             <Space direction="vertical" style={{ width: '100%' }} size="small">
               {aiResult.evidence.map((e, i) => (
-                <div key={i} style={{ padding: 6, borderLeft: '3px solid #1890ff', paddingLeft: 8 }}>
-                  <div style={{ fontSize: 12 }}>
+                <div key={i} style={{ padding: 8, borderLeft: '3px solid #1890ff', paddingLeft: 10, background: '#fafafa', borderRadius: 4 }}>
+                  <div style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    {e.id && (
+                      <Button
+                        type="link"
+                        size="small"
+                        style={{ padding: 0, fontWeight: 600, color: '#1890ff' }}
+                        onClick={() => {
+                          setTab('evidence')
+                          setTimeout(() => {
+                            const el = document.getElementById(`evidence-${e.id}`)
+                            if (el) {
+                              el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                              el.style.background = '#fffbe6'
+                              setTimeout(() => { el.style.background = '' }, 2000)
+                            }
+                          }, 300)
+                        }}
+                      >
+                        [{e.id}]
+                      </Button>
+                    )}
                     <Tag color="blue">{e.type}</Tag>
                     <Tag color={e.importance === 'high' ? 'red' : e.importance === 'medium' ? 'orange' : 'default'}>
                       {e.importance}
                     </Tag>
-                    <span>{e.description}</span>
+                    <span style={{ fontSize: 13 }}>{e.description}</span>
                   </div>
-                  {e.resource && <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>资源: {e.resource}</div>}
+                  {e.resource && <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>资源: {e.resource}</div>}
                 </div>
               ))}
             </Space>
+          </Card>
+        )}
+
+        {/* Missing Sources */}
+        {aiResult.data_sources && (
+          <Card title="数据源状态" size="small" style={{ marginBottom: 12 }}>
+            <Space size="small" wrap>
+              {[
+                { key: 'alerts_available', label: '告警' },
+                { key: 'anomalies_available', label: '异常' },
+                { key: 'metrics_available', label: '指标' },
+                { key: 'logs_available', label: '日志' },
+                { key: 'events_available', label: '事件' },
+                { key: 'topology_available', label: '拓扑' },
+              ].map(({ key, label }) => (
+                <Tag key={key} color={(aiResult.data_sources as any)[key] ? 'green' : 'default'}>
+                  {label}: {(aiResult.data_sources as any)[key] ? '可用' : '无数据'}
+                </Tag>
+              ))}
+            </Space>
+            {aiResult.confidence < 0.5 && (
+              <div style={{ marginTop: 8, fontSize: 12, color: '#faad14' }}>
+                置信度较低，部分数据源缺失，根因分析仅供参考。
+              </div>
+            )}
           </Card>
         )}
 
@@ -721,6 +785,229 @@ export default function IncidentDetail({ id, open, onClose, onChanged }: Props) 
     )
   }
 
+  const renderEvidence = () => {
+    if (evidenceLoading) return <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
+    if (!evidence) return <Empty description="暂无 Evidence 数据" />
+
+    // 兼容 API 返回 null 的情况，统一转换为空数组
+    const alerts = evidence.alerts || []
+    const anomalies = evidence.anomalies || []
+    const events = evidence.events || []
+    const metrics = evidence.metrics || []
+    const logs = evidence.logs || []
+    const timeline = evidence.timeline || []
+    const podState = evidence.pod_resource_state || null
+
+    const totalCount = alerts.length + anomalies.length + events.length + metrics.length + logs.length
+
+    return (
+      <div>
+        {/* 数据源状态 */}
+        <Card size="small" title="数据源状态" style={{ marginBottom: 12 }}>
+          <Space wrap>
+            {Object.entries(evidence.sources).map(([key, status]) => (
+              <Tag key={key} color={status === 'success' ? 'green' : 'default'}>
+                {key}: {status === 'success' ? `${status}` : '无数据'}
+              </Tag>
+            ))}
+          </Space>
+        </Card>
+
+        {/* Pod Resource State */}
+        {podState && (
+          <Card size="small" title="Pod 资源状态" style={{ marginBottom: 12 }}>
+            <Descriptions size="small" column={2} bordered>
+              <Descriptions.Item label="Phase">
+                <Tag color={podState.phase === 'Running' ? 'green' : 'orange'}>
+                  {podState.phase}
+                </Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="Ready">
+                <Tag color={podState.ready ? 'green' : 'red'}>
+                  {podState.ready ? 'Ready' : 'Not Ready'}
+                </Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="Restart Count">
+                <span style={{ color: podState.restart_count > 3 ? '#ff4d4f' : '#333', fontWeight: 'bold' }}>
+                  {podState.restart_count}
+                </span>
+              </Descriptions.Item>
+              <Descriptions.Item label="Node">{podState.node_name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="Pod IP">{podState.pod_ip || '-'}</Descriptions.Item>
+              <Descriptions.Item label="Host IP">{podState.host_ip || '-'}</Descriptions.Item>
+              <Descriptions.Item label="Start Time" span={2}>
+                {podState.start_time ? new Date(podState.start_time).toLocaleString() : '-'}
+              </Descriptions.Item>
+            </Descriptions>
+
+            {/* Container 状态 */}
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 'bold', marginBottom: 8 }}>Containers</div>
+              <Table
+                size="small"
+                dataSource={podState.containers}
+                rowKey="name"
+                pagination={false}
+                columns={[
+                  { title: 'Name', dataIndex: 'name', width: 120 },
+                  { title: 'Ready', dataIndex: 'ready', width: 70, render: (v: boolean) => <Tag color={v ? 'green' : 'red'}>{v ? 'Yes' : 'No'}</Tag> },
+                  { title: 'Restarts', dataIndex: 'restart_count', width: 70 },
+                  {
+                    title: 'State', dataIndex: 'state', width: 90,
+                    render: (v: string) => {
+                      const color = v === 'running' ? 'green' : v === 'waiting' ? 'orange' : v === 'terminated' ? 'red' : 'default'
+                      return <Tag color={color}>{v}</Tag>
+                    },
+                  },
+                  { title: 'Reason', dataIndex: 'reason', width: 120, render: (v: string) => v ? <Tag color="red">{v}</Tag> : '-' },
+                  { title: 'Exit Code', dataIndex: 'exit_code', width: 80, render: (v: number | null) => v !== null && v !== undefined ? v : '-' },
+                  { title: 'Last State', dataIndex: 'last_state', width: 90 },
+                  { title: 'Last Reason', dataIndex: 'last_reason', width: 120, render: (v: string) => v || '-' },
+                ]}
+              />
+            </div>
+
+            {/* Conditions */}
+            {podState.conditions?.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ fontSize: 13, fontWeight: 'bold', marginBottom: 8 }}>Conditions</div>
+                <Table
+                  size="small"
+                  dataSource={podState.conditions || []}
+                  rowKey="type"
+                  pagination={false}
+                  columns={[
+                    { title: 'Type', dataIndex: 'type', width: 150 },
+                    { title: 'Status', dataIndex: 'status', width: 80, render: (v: string) => <Tag color={v === 'True' ? 'green' : v === 'False' ? 'red' : 'orange'}>{v}</Tag> },
+                    { title: 'Reason', dataIndex: 'reason', render: (v: string) => v || '-' },
+                    { title: 'Message', dataIndex: 'message', ellipsis: true, render: (v: string) => v || '-' },
+                  ]}
+                />
+              </div>
+            )}
+          </Card>
+        )}
+
+        {/* Evidence 时间线 */}
+        {timeline && timeline.length > 0 && (
+          <Card size="small" title={`Evidence 时间线 (${timeline.length})`} style={{ marginBottom: 12 }}>
+            <Timeline
+              items={timeline.slice(0, 50).map((t) => ({
+                color: t.severity === 'critical' ? 'red' : t.severity === 'warning' ? 'orange' : 'blue',
+                children: (
+                  <div>
+                    <Space>
+                      <Tag>{t.type}</Tag>
+                      {t.severity && <Tag color={t.severity === 'critical' ? 'red' : 'orange'}>{t.severity}</Tag>}
+                      {t.resource && <span style={{ fontSize: 12, color: '#666' }}>{t.resource}</span>}
+                    </Space>
+                    <div style={{ fontSize: 13, marginTop: 2 }}>{t.description}</div>
+                    <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>{new Date(t.timestamp).toLocaleString()}</div>
+                  </div>
+                ),
+              }))}
+            />
+          </Card>
+        )}
+
+        {/* Kubernetes Events */}
+        {events.length > 0 && (
+          <Card size="small" title={`Kubernetes Events (${events.length})`} style={{ marginBottom: 12 }}>
+            {events.slice(0, 20).map((e, i) => (
+              <div key={i} style={{ padding: '6px 0', borderBottom: '1px solid #f0f0f0' }}>
+                <Space>
+                  <Tag color={e.type === 'Warning' ? 'orange' : 'blue'}>{e.type}</Tag>
+                  <Tag>{e.reason}</Tag>
+                  {e.count > 1 && <Tag style={{ fontSize: 10 }}>x{e.count}</Tag>}
+                </Space>
+                <div style={{ fontSize: 12, color: '#333', marginTop: 2 }}>{e.message}</div>
+                <div style={{ fontSize: 11, color: '#999', marginTop: 1 }}>{e.namespace}/{e.resource_name} · {new Date(e.timestamp).toLocaleString()}</div>
+              </div>
+            ))}
+          </Card>
+        )}
+
+        {/* Metrics */}
+        {metrics.length > 0 && (
+          <Card size="small" title={`指标 (${metrics.length})`} style={{ marginBottom: 12 }}>
+            <Table
+              size="small"
+              dataSource={metrics}
+              rowKey={(m, i) => `${m.metric}-${i}`}
+              pagination={{ pageSize: 10, size: 'small' }}
+              columns={[
+                { title: '指标', dataIndex: 'metric', width: 150 },
+                { title: '值', dataIndex: 'value', width: 120, render: (v: number) => v != null ? Number(v).toFixed(2) : '-' },
+                { title: '资源', dataIndex: 'resource', width: 150 },
+                { title: '时间', dataIndex: 'timestamp', render: (t: string) => t ? new Date(t).toLocaleTimeString() : '-' },
+              ]}
+            />
+          </Card>
+        )}
+
+        {/* Logs */}
+        {logs.length > 0 && (
+          <Card size="small" title={`错误日志 (${logs.length})`} style={{ marginBottom: 12 }}>
+            {logs.slice(0, 20).map((l, i) => (
+              <div key={i} style={{ padding: '4px 0', borderBottom: '1px solid #f5f5f5' }}>
+                <Space>
+                  <Tag color={l.level === 'ERROR' ? 'red' : l.level === 'WARN' ? 'orange' : 'blue'}>{l.level}</Tag>
+                  <span style={{ fontSize: 11, color: '#999' }}>{l.pod}</span>
+                </Space>
+                <div style={{ fontSize: 12, fontFamily: 'monospace', marginTop: 2 }}>{l.message}</div>
+              </div>
+            ))}
+          </Card>
+        )}
+
+        {/* Alerts */}
+        {alerts.length > 0 && (
+          <Card size="small" title={`关联告警 (${alerts.length})`} style={{ marginBottom: 12 }}>
+            {alerts.map((a, i) => (
+              <div key={i} style={{ padding: '6px 0', borderBottom: '1px solid #f0f0f0' }}>
+                <Space>
+                  <Tag color={a.severity === 'critical' ? 'red' : 'orange'}>{a.severity}</Tag>
+                  <strong>{a.alertname}</strong>
+                </Space>
+                <div style={{ fontSize: 12, color: '#666', marginTop: 2 }}>
+                  {a.namespace && `${a.namespace}/`}{a.pod || a.node || a.service || '-'} · {new Date(a.starts_at).toLocaleString()}
+                </div>
+              </div>
+            ))}
+          </Card>
+        )}
+
+        {/* Anomalies */}
+        {anomalies.length > 0 && (
+          <Card size="small" title={`异常 (${anomalies.length})`}>
+            <Table
+              size="small"
+              dataSource={anomalies}
+              rowKey="id"
+              pagination={{ pageSize: 10, size: 'small' }}
+              columns={[
+                { title: '指标', dataIndex: 'metric', width: 150 },
+                { title: '值', dataIndex: 'value', width: 80, render: (v: number) => v != null ? Number(v).toFixed(2) : '-' },
+                { title: '基线', dataIndex: 'baseline', width: 80, render: (v: number) => v != null ? Number(v).toFixed(2) : '-' },
+                { title: '级别', dataIndex: 'severity', width: 80, render: (s: string) => <Tag color={s === 'critical' ? 'red' : 'orange'}>{s}</Tag> },
+                { title: '原因', dataIndex: 'reason', ellipsis: true },
+              ]}
+            />
+          </Card>
+        )}
+
+        {totalCount === 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            message="未收集到 Evidence"
+            description="所有数据源均无数据。请检查 Prometheus、Elasticsearch、Kubernetes 连接是否正常。"
+          />
+        )}
+      </div>
+    )
+  }
+
   return (
     <Drawer
       title={incident ? `事件 #${incident.id}: ${incident.title}` : '事件详情'}
@@ -752,6 +1039,7 @@ export default function IncidentDetail({ id, open, onClose, onChanged }: Props) 
             { key: 'signals', label: `关联信号 (${signals.length})`, children: renderSignals() },
             { key: 'topology', label: '拓扑影响', children: renderTopology() },
             { key: 'rca', label: '根因分析', children: renderRCA() },
+            { key: 'evidence', label: '证据链', children: renderEvidence() },
             { key: 'ai', label: 'AI 分析', children: renderAI() },
             { key: 'actions', label: '推荐操作', children: renderRecommendedActions() },
           ]}

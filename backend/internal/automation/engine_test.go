@@ -52,7 +52,7 @@ func TestScaleDeploymentWithConfirm(t *testing.T) {
 func TestGetPodLogs(t *testing.T) {
 	engine := newTestEngine()
 	// 只读操作不需要确认，但会因为没有 K8s 集群返回错误。
-	_, err := engine.GetPodLogs(context.Background(), "", "default", "my-pod", "", 100)
+	_, err := engine.GetPodLogs(context.Background(), "", "default", "my-pod", "", 100, true)
 	if err == nil {
 		t.Fatal("expected error from K8s connection")
 	}

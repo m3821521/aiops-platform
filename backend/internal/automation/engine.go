@@ -67,15 +67,15 @@ func (e *Engine) record(rec ActionRecord) {
 }
 
 // GetPodLogs 获取 Pod 日志（只读）。
-func (e *Engine) GetPodLogs(ctx context.Context, clusterName, namespace, pod, container string, tailLines int64) (string, error) {
-	logs, err := e.cluster.GetPodLogs(ctx, clusterName, namespace, pod, container, tailLines)
+func (e *Engine) GetPodLogs(ctx context.Context, clusterName, namespace, pod, container string, tailLines int64, timestamps bool) (string, error) {
+	logs, err := e.cluster.GetPodLogs(ctx, clusterName, namespace, pod, container, tailLines, timestamps)
 	e.record(ActionRecord{
 		Action:     ActionRead,
 		Resource:   "pod_logs",
 		Name:       pod,
 		Namespace:  namespace,
 		Cluster:    clusterName,
-		Params:     fmt.Sprintf("container=%s,tail=%d", container, tailLines),
+		Params:     fmt.Sprintf("container=%s,tail=%d,timestamps=%v", container, tailLines, timestamps),
 		Result:     "success",
 		ExecutedAt: time.Now(),
 	})
@@ -95,6 +95,38 @@ func (e *Engine) GetPodEvents(ctx context.Context, clusterName, namespace, pod s
 		ExecutedAt: time.Now(),
 	})
 	return events, err
+}
+
+// ExecPod 在 Pod 中执行命令（写操作，需确认）。
+func (e *Engine) ExecPod(ctx context.Context, clusterName, namespace, pod, container string, command []string, confirmed bool) (*cluster.ExecResult, error) {
+	if err := e.requireConfirm(confirmed); err != nil {
+		e.record(ActionRecord{
+			Action:     ActionWrite,
+			Resource:   "pod_exec",
+			Name:       pod,
+			Namespace:  namespace,
+			Cluster:    clusterName,
+			Params:     fmt.Sprintf("container=%s,command=%v", container, command),
+			Result:     "rejected",
+			Error:      err.Error(),
+			Confirmed:  false,
+			ExecutedAt: time.Now(),
+		})
+		return nil, err
+	}
+	result, err := e.cluster.ExecPod(ctx, clusterName, namespace, pod, container, command)
+	e.record(ActionRecord{
+		Action:     ActionWrite,
+		Resource:   "pod_exec",
+		Name:       pod,
+		Namespace:  namespace,
+		Cluster:    clusterName,
+		Params:     fmt.Sprintf("container=%s,command=%v", container, command),
+		Result:     "success",
+		Confirmed:  true,
+		ExecutedAt: time.Now(),
+	})
+	return result, err
 }
 
 // RestartPod 重启 Pod（写操作，需确认）。

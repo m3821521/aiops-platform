@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -9,6 +10,8 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/remotecommand"
 	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 	"sigs.k8s.io/yaml"
 )
@@ -109,6 +112,32 @@ func (s *Service) ListServices(ctx context.Context, cluster, namespace string) (
 	return list.Items, nil
 }
 
+// GetService 获取单个 Service 详情（只读操作）。
+func (s *Service) GetService(ctx context.Context, cluster, namespace, name string) (*corev1.Service, error) {
+	client, err := s.mgr.Client(cluster)
+	if err != nil {
+		return nil, err
+	}
+	svc, err := client.CoreV1().Services(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return svc, nil
+}
+
+// GetEndpoints 获取 Service 对应的 Endpoints（只读操作）。
+func (s *Service) GetEndpoints(ctx context.Context, cluster, namespace, name string) (*corev1.Endpoints, error) {
+	client, err := s.mgr.Client(cluster)
+	if err != nil {
+		return nil, err
+	}
+	ep, err := client.CoreV1().Endpoints(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return ep, nil
+}
+
 func (s *Service) ListConfigMaps(ctx context.Context, cluster, namespace string) ([]corev1.ConfigMap, error) {
 	client, err := s.mgr.Client(cluster)
 	if err != nil {
@@ -139,7 +168,8 @@ func NamespaceOrAll(ns string) string {
 
 // GetPodLogs 获取 Pod 日志（只读操作）。
 // tailLines 为返回的最后 N 行，0 表示全部。
-func (s *Service) GetPodLogs(ctx context.Context, cluster, namespace, pod, container string, tailLines int64) (string, error) {
+// timestamps 为 true 时由 Kubernetes API 在每行日志前添加 RFC3339 时间戳。
+func (s *Service) GetPodLogs(ctx context.Context, cluster, namespace, pod, container string, tailLines int64, timestamps bool) (string, error) {
 	client, err := s.mgr.Client(cluster)
 	if err != nil {
 		return "", err
@@ -151,6 +181,9 @@ func (s *Service) GetPodLogs(ctx context.Context, cluster, namespace, pod, conta
 	}
 	if tailLines > 0 {
 		opts.TailLines = &tailLines
+	}
+	if timestamps {
+		opts.Timestamps = true
 	}
 
 	stream, err := client.CoreV1().Pods(namespace).GetLogs(pod, opts).Stream(ctx)
@@ -164,6 +197,62 @@ func (s *Service) GetPodLogs(ctx context.Context, cluster, namespace, pod, conta
 		return "", err
 	}
 	return string(data), nil
+}
+
+// ExecResult 是 Pod 命令执行结果。
+type ExecResult struct {
+	Stdout   string `json:"stdout"`
+	Stderr   string `json:"stderr"`
+	ExitCode int    `json:"exit_code"`
+}
+
+// ExecPod 在 Pod 中执行命令（一次性执行，非交互式终端）。
+// command 为命令数组，例如 ["sh", "-c", "ls -la"]。
+func (s *Service) ExecPod(ctx context.Context, cluster, namespace, pod, container string, command []string) (*ExecResult, error) {
+	client, err := s.mgr.Client(cluster)
+	if err != nil {
+		return nil, err
+	}
+	restCfg, err := s.mgr.RESTConfig(cluster)
+	if err != nil {
+		return nil, err
+	}
+
+	execOpts := &corev1.PodExecOptions{
+		Container: container,
+		Command:   command,
+		Stdin:     false,
+		Stdout:    true,
+		Stderr:    true,
+		TTY:       false,
+	}
+
+	req := client.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(pod).
+		Namespace(namespace).
+		SubResource("exec").
+		VersionedParams(execOpts, scheme.ParameterCodec)
+
+	exec, err := remotecommand.NewSPDYExecutor(restCfg, "POST", req.URL())
+	if err != nil {
+		return nil, fmt.Errorf("创建 executor 失败: %w", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+
+	result := &ExecResult{
+		Stdout: stdout.String(),
+		Stderr: stderr.String(),
+	}
+	if err != nil {
+		result.ExitCode = 1
+	}
+	return result, nil
 }
 
 // GetPodEvents 获取 Pod 相关的 Event（只读操作）。

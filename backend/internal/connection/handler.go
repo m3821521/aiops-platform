@@ -2,6 +2,7 @@ package connection
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -212,8 +213,8 @@ func (h *Handler) TestConnection(c *gin.Context) {
 
 	// 更新 Connection 状态
 	if err := h.connectionService.UpdateStatus(c.Request.Context(), id, result.Status, result.ErrorMessage); err != nil {
-		// 状态更新失败不影响测试结果返回
-		_ = err
+		// 状态更新失败不影响测试结果返回，但记录日志
+		slog.Warn("更新连接状态失败", "connection_id", id, "error", err)
 	}
 
 	response.OK(c, result)
@@ -231,6 +232,7 @@ func (h *Handler) ListConnectionTypes(c *gin.Context) {
 		TypeRedis,
 		TypeJenkins,
 		TypeArgoCD,
+		TypeDocker,
 	}
 
 	registeredProviders := h.providerRegistry.List()

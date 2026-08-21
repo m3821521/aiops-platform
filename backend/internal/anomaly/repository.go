@@ -184,6 +184,32 @@ func (r *Repository) UpdateIncident(ctx context.Context, id, incidentID int64) e
 		Update("incident_id", incidentID).Error
 }
 
+// FindActiveByResourceAndMetric 查询某资源+metric的活跃异常。
+// 用于去重合并和异常恢复：同一资源+metric在短时间内应合并为一条持续异常。
+func (r *Repository) FindActiveByResourceAndMetric(ctx context.Context, cluster, resourceType, resourceName, metric string) (*AnomalyRecord, error) {
+	var rec AnomalyRecord
+	err := r.db.WithContext(ctx).Model(&AnomalyRecord{}).
+		Where("cluster = ? AND resource_type = ? AND resource_name = ? AND metric = ? AND status != ?",
+			cluster, resourceType, resourceName, metric, AnomalyStatusResolved).
+		Order("timestamp DESC").
+		First(&rec).Error
+	if err != nil {
+		return nil, err
+	}
+	return &rec, nil
+}
+
+// MarkResolved 标记异常为已恢复。
+func (r *Repository) MarkResolved(ctx context.Context, id int64) error {
+	now := time.Now()
+	return r.db.WithContext(ctx).Model(&AnomalyRecord{}).Where("id = ?", id).
+		Updates(map[string]any{
+			"status":     AnomalyStatusResolved,
+			"resolved_at": &now,
+			"updated_at": now,
+		}).Error
+}
+
 // applyFilter 应用通用过滤条件。
 func applyFilter(q *gorm.DB, filter ListFilter) *gorm.DB {
 	if filter.Cluster != "" {

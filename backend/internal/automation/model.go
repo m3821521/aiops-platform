@@ -98,6 +98,8 @@ type Action struct {
 	RejectedBy    int64          `json:"rejected_by,omitempty"`
 	RejectedAt    *time.Time     `json:"rejected_at,omitempty"`
 	RejectReason  string         `json:"reject_reason,omitempty"`
+	FinishedAt    *time.Time     `json:"finished_at,omitempty"`
+	LeaseExpiresAt *time.Time   `gorm:"index" json:"lease_expires_at,omitempty"`
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
 }

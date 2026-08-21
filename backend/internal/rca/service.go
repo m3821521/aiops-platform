@@ -49,3 +49,9 @@ func (s *Service) GetLatest(ctx context.Context, incidentID int64) (*RCAResult, 
 func (s *Service) GetHistory(ctx context.Context, incidentID int64, limit int) ([]IncidentAnalysis, error) {
 	return s.repository.FindHistory(ctx, incidentID, limit)
 }
+
+// CollectEvidence 只收集 Evidence，不执行 RCA 分析。
+// 用于 GET /incidents/:id/evidence API，不依赖 RCA 先执行。
+func (s *Service) CollectEvidence(ctx context.Context, incidentID int64, cluster, namespace, service, resourceType, resourceName string, startTime, endTime time.Time) (*EvidenceBundle, error) {
+	return s.pipeline.CollectEvidence(ctx, incidentID, cluster, namespace, service, resourceType, resourceName, startTime, endTime)
+}

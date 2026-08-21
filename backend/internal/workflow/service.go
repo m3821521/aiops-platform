@@ -4,10 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"math/rand"
 	"sort"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+)
+
+// Lease / Heartbeat 配置。
+const (
+	wfHeartbeatInterval   = 20 * time.Second
+	wfLeaseTimeout        = 60 * time.Second
+	wfRecoveryScanInterval = 30 * time.Second
+	wfRecoveryJitter      = 5 * time.Second
 )
 
 // ActionExecutor 执行单个 Action 的接口。
@@ -72,6 +82,54 @@ func NewService(repo *Repository, executor ActionExecutor) *Service {
 // SetK8sQuerier 设置 Kubernetes 查询器（用于 observation/investigation/verification 步骤）。
 func (s *Service) SetK8sQuerier(querier K8sQuerier) {
 	s.k8sQuerier = querier
+}
+
+// RecoverStaleExecutions 服务启动时恢复因 Worker 崩溃而永久停留在 RUNNING 状态的 Workflow。
+// 将超过 threshold 时间未更新的 RUNNING Workflow 标记为 FAILED，避免状态永久卡住。
+// 返回被恢复的 Workflow 数量。
+func (s *Service) RecoverStaleExecutions(ctx context.Context, threshold time.Duration) (int64, error) {
+	if threshold <= 0 {
+		threshold = 5 * time.Minute
+	}
+	count, err := s.repo.MarkStaleRunningAsFailed(ctx, threshold)
+	if err != nil {
+		slog.Error("recover stale workflow executions failed", "error", err)
+		return 0, err
+	}
+	if count > 0 {
+		slog.Warn("recovered stale workflow executions", "count", count, "threshold", threshold.String())
+	}
+	return count, nil
+}
+
+// StartRecoveryScanner 启动后台 Runtime Recovery Scanner。
+// 每约 30 秒（带 ±5 秒 jitter）扫描 lease 已过期的 RUNNING Workflow，标记为 FAILED。
+// 每个服务实例都可以独立运行，CAS 条件更新保证多实例下不重复处理。
+// 调用方应在服务启动时调用，并在优雅关闭时 cancel context。
+func (s *Service) StartRecoveryScanner(ctx context.Context) {
+	go func() {
+		slog.Info("workflow recovery scanner started", "interval", wfRecoveryScanInterval.String(), "jitter", wfRecoveryJitter.String())
+		for {
+			// 带 jitter 的等待，避免多实例同时扫描造成 DB 压力尖峰。
+			jitter := time.Duration(rand.Int63n(int64(wfRecoveryJitter*2))) - wfRecoveryJitter
+			wait := wfRecoveryScanInterval + jitter
+			select {
+			case <-ctx.Done():
+				slog.Info("workflow recovery scanner stopped")
+				return
+			case <-time.After(wait):
+				count, err := s.repo.RecoverExpiredLease(ctx)
+				if err != nil {
+					if ctx.Err() != nil {
+						return // context 被取消，正常退出
+					}
+					slog.Error("workflow recovery scanner failed", "error", err)
+				} else if count > 0 {
+					slog.Warn("recovered expired lease workflows", "count", count)
+				}
+			}
+		}
+	}()
 }
 
 // maxRetryDelay 最大重试延迟（秒）。
@@ -357,6 +415,8 @@ func (s *Service) Execute(ctx context.Context, workflowID, userID int64) (*Workf
 	wf.Status = WorkflowStatusRunning
 	wf.StartedAt = &now
 	wf.UpdatedAt = now
+	leaseExpires := now.Add(wfLeaseTimeout)
+	wf.LeaseExpiresAt = &leaseExpires
 	s.repo.Update(ctx, wf)
 
 	// 创建工作流执行记录
@@ -371,8 +431,27 @@ func (s *Service) Execute(ctx context.Context, workflowID, userID int64) (*Workf
 	}
 	if err := s.repo.CreateExecution(ctx, exec); err != nil {
 		// 执行记录创建失败不影响工作流执行，但记录错误
-		fmt.Printf("创建工作流执行记录失败: %v\n", err)
+		slog.Error("创建工作流执行记录失败", "workflow_id", wf.ID, "error", err)
 	}
+
+	// 启动 heartbeat goroutine，定期刷新 lease。
+	// heartbeat 覆盖整个 Workflow 执行周期，包括 Step 之间、retry、retry delay。
+	heartbeatCtx, heartbeatCancel := context.WithCancel(context.Background())
+	go func() {
+		defer heartbeatCancel()
+		ticker := time.NewTicker(wfHeartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+				return
+			case <-ticker.C:
+				if err := s.repo.RefreshLease(heartbeatCtx, wf.ID, wfLeaseTimeout); err != nil {
+					slog.Error("workflow heartbeat refresh failed", "workflow_id", wf.ID, "error", err)
+				}
+			}
+		}
+	}()
 
 	steps := wf.Steps
 	sort.Slice(steps, func(i, j int) bool { return steps[i].Order < steps[j].Order })
@@ -425,8 +504,9 @@ func (s *Service) Execute(ctx context.Context, workflowID, userID int64) (*Workf
 					break
 				}
 				// 可以安全重试，记录安全检查日志
-				fmt.Printf("workflow step automation retry safety check passed: workflow_id=%d execution_id=%d step_id=%d attempt=%d message=%s\n",
-					wf.ID, exec.ID, step.ID, attempt, safetyMsg)
+				slog.Info("workflow step automation retry safety check passed",
+					"workflow_id", wf.ID, "execution_id", exec.ID, "step_id", step.ID,
+					"attempt", attempt, "message", safetyMsg)
 			}
 
 			// 执行当前 attempt
@@ -514,8 +594,10 @@ func (s *Service) Execute(ctx context.Context, workflowID, userID int64) (*Workf
 
 			// 计算 retry delay 并等待
 			retryDelay := calculateRetryDelay(step.RetryDelaySec, attempt)
-			fmt.Printf("workflow step failed, retrying: workflow_id=%d execution_id=%d step_id=%d step_type=%s attempt=%d max_attempts=%d retry_count=%d retry_delay=%s error=%v\n",
-				wf.ID, exec.ID, step.ID, step.Type, attempt, maxAttempts, step.RetryCount, retryDelay, execErr)
+			slog.Warn("workflow step failed, retrying",
+				"workflow_id", wf.ID, "execution_id", exec.ID, "step_id", step.ID,
+				"step_type", step.Type, "attempt", attempt, "max_attempts", maxAttempts,
+				"retry_count", step.RetryCount, "retry_delay", retryDelay.String(), "error", execErr)
 
 			if waitErr := waitWithContext(ctx, retryDelay); waitErr != nil {
 				// context 被取消，立即退出
@@ -557,16 +639,34 @@ func (s *Service) Execute(ctx context.Context, workflowID, userID int64) (*Workf
 		s.repo.UpdateStep(ctx, step)
 	}
 
+	// 停止 heartbeat。
+	heartbeatCancel()
+
 	finished := time.Now()
 	wf.FinishedAt = &finished
 	wf.DurationMs = finished.Sub(now).Milliseconds()
-	if allSuccess {
-		wf.Status = WorkflowStatusSuccess
-	} else {
-		wf.Status = WorkflowStatusFailed
+	finalStatus := WorkflowStatusSuccess
+	if !allSuccess {
+		finalStatus = WorkflowStatusFailed
 	}
-	wf.UpdatedAt = finished
-	s.repo.Update(ctx, wf)
+
+	// CAS 更新 Workflow 最终状态。
+	// 仅当当前状态为 running 时才更新，防止 Recovery Scanner 覆盖已完成的状态。
+	updated, err := s.repo.UpdateStatusIfRunning(ctx, wf.ID, finalStatus)
+	if err != nil {
+		slog.Error("workflow final status update failed", "workflow_id", wf.ID, "error", err)
+	} else if !updated {
+		// RowsAffected == 0，说明状态已被 Recovery 修改
+		slog.Warn("workflow status already changed by recovery, skipping final update",
+			"workflow_id", wf.ID, "expected_status", finalStatus)
+		// 读取当前状态用于诊断
+		if current, ferr := s.repo.FindByID(ctx, wf.ID); ferr == nil {
+			wf = current
+		}
+	} else {
+		wf.Status = finalStatus
+		wf.UpdatedAt = finished
+	}
 
 	// 更新工作流执行记录
 	exec.Status = wf.Status
@@ -615,7 +715,7 @@ func (s *Service) recordStepExecutionWithAttempt(ctx context.Context, workflowEx
 		stepExec.DurationMs = finishedAt.Sub(*startedAt).Milliseconds()
 	}
 	if err := s.repo.CreateStepExecution(ctx, stepExec); err != nil {
-		fmt.Printf("记录步骤执行失败: %v\n", err)
+		slog.Error("记录步骤执行失败", "workflow_execution_id", workflowExecutionID, "step_id", step.ID, "error", err)
 	}
 }
 

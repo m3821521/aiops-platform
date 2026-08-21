@@ -233,20 +233,30 @@ func TestService_DetectAndPersist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("detect and persist: %v", err)
 	}
-	if result.SavedCount != 2 {
-		t.Fatalf("expected saved 2, got %d", result.SavedCount)
+	if result.SavedCount != 1 {
+		t.Fatalf("expected saved 1 (deduplicated), got %d", result.SavedCount)
 	}
 
-	// 验证数据库中有 2 条记录。
+	// 验证数据库中有 1 条记录（去重合并：同一资源+metric只保留最新一条）。
 	records, total, err := repo.List(context.Background(), anomaly.ListFilter{}, 1, 10)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if total != 2 {
-		t.Fatalf("expected 2 records, got %d", total)
+	if total != 1 {
+		t.Fatalf("expected 1 record (deduplicated), got %d", total)
 	}
 	if records[0].ResourceName != "test-pod" {
 		t.Fatalf("expected resource test-pod, got %s", records[0].ResourceName)
+	}
+	// 验证取的是最新异常点（value=95, severity=critical）。
+	if records[0].Value != 95 {
+		t.Fatalf("expected latest value 95, got %v", records[0].Value)
+	}
+	if records[0].Severity != "critical" {
+		t.Fatalf("expected severity critical, got %s", records[0].Severity)
+	}
+	if records[0].Status != "active" {
+		t.Fatalf("expected status active, got %s", records[0].Status)
 	}
 }
 

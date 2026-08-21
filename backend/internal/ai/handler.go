@@ -1,17 +1,20 @@
 package ai
 
 import (
+	"log/slog"
 	"strconv"
 
+	"github.com/aiops/aiops-platform/internal/auth"
 	"github.com/aiops/aiops-platform/pkg/response"
 	"github.com/gin-gonic/gin"
 )
 
 // IncidentAIHandler 处理基于 Incident 的 AI 分析请求。
 type IncidentAIHandler struct {
-	Service    *AnalysisService
-	Repository *AIAnalysisRepository
-	Enabled    bool
+	Service       *AnalysisService
+	Repository    *AIAnalysisRepository
+	Enabled       bool
+	ActionCreator ActionCreator // AI → Action 自动创建适配层
 }
 
 // Analyze 处理 POST /api/v1/incidents/:id/ai-analyze
@@ -40,6 +43,24 @@ func (h *IncidentAIHandler) Analyze(c *gin.Context) {
 		}
 		if _, err := h.Repository.Create(c.Request.Context(), record); err != nil {
 			// 保存失败不影响返回。
+		}
+	}
+
+	// AI → Action 自动创建：将可执行的 Recommendation 自动创建为 pending_approval 的 Action。
+	userID := int64(0)
+	if user := auth.CurrentUser(c); user != nil {
+		userID = user.ID
+	}
+	slog.Info("ai: auto create actions check",
+		"incident_id", id,
+		"user_id", userID,
+		"action_creator_nil", h.ActionCreator == nil,
+		"recommendations_count", len(result.Recommendations),
+	)
+	if h.ActionCreator != nil && userID > 0 && len(result.Recommendations) > 0 {
+		createdActions := autoCreateActionsFromRecommendations(c.Request.Context(), h.ActionCreator, id, userID, result.Recommendations)
+		if len(createdActions) > 0 {
+			result.CreatedActions = createdActions
 		}
 	}
 

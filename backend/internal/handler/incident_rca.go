@@ -111,7 +111,7 @@ func (h *IncidentRCAHandler) Reanalyze(c *gin.Context) {
 }
 
 // GetEvidence 处理 GET /api/v1/incidents/:id/evidence
-// 获取最近 RCA 的证据列表。
+// 获取 Incident 的完整 Evidence 链。独立收集，不依赖 RCA 先执行。
 func (h *IncidentRCAHandler) GetEvidence(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -120,11 +120,34 @@ func (h *IncidentRCAHandler) GetEvidence(c *gin.Context) {
 		return
 	}
 
-	result, err := h.RCAService.GetLatest(c.Request.Context(), id)
+	// 获取 Incident 信息。
+	inc, err := h.IncidentService.Get(c.Request.Context(), id)
 	if err != nil {
-		response.NotFound(c, "未找到 RCA 结果")
+		response.NotFound(c, "incident 不存在")
 		return
 	}
 
-	response.OK(c, result.Evidence)
+	endTime := time.Now()
+	if inc.EndTime != nil {
+		endTime = *inc.EndTime
+	}
+
+	// 独立收集 Evidence，不依赖 RCA 结果。
+	bundle, err := h.RCAService.CollectEvidence(
+		c.Request.Context(),
+		id,
+		inc.Cluster,
+		inc.Namespace,
+		inc.Service,
+		inc.ResourceType,
+		inc.ResourceName,
+		inc.StartTime,
+		endTime,
+	)
+	if err != nil {
+		response.Internal(c, "收集 Evidence 失败: "+err.Error())
+		return
+	}
+
+	response.OK(c, bundle)
 }

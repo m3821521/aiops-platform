@@ -61,11 +61,16 @@ export default function Topology() {
   const fetchClusters = useCallback(async () => {
     try {
       const list = await clusterApi.list()
-      setClusters(list?.map((c: any) => c.name) || ['local'])
+      const names = list?.map((c: any) => c.name) || []
+      setClusters(names.length > 0 ? names : ['local'])
+      // 自动选择第一个有效集群（如果当前 cluster 不在列表中）
+      if (names.length > 0 && !names.includes(cluster)) {
+        setCluster(names[0])
+      }
     } catch {
       setClusters(['local'])
     }
-  }, [])
+  }, [cluster])
 
   const fetchGraph = useCallback(async () => {
     setLoading(true)

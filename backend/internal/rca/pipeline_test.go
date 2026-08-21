@@ -29,6 +29,7 @@ type mockCollector struct {
 	metrics   []MetricInfo
 	logs      []LogInfo
 	topology  TopologyInfo
+	podState  *PodResourceState
 }
 
 func (m *mockCollector) CollectAlerts(ctx context.Context, incidentID int64) ([]AlertInfo, error) {
@@ -48,6 +49,9 @@ func (m *mockCollector) CollectLogs(ctx context.Context, cluster, namespace, pod
 }
 func (m *mockCollector) CollectTopology(ctx context.Context, cluster, namespace string) (TopologyInfo, error) {
 	return m.topology, nil
+}
+func (m *mockCollector) CollectPodResourceState(ctx context.Context, cluster, namespace, pod string) (*PodResourceState, error) {
+	return m.podState, nil
 }
 
 // Scenario 1: Node Memory Pressure → Pod OOMKilled → Pod Restart → Service Alert

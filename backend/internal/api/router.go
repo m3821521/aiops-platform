@@ -1,6 +1,8 @@
 package api
 
 import (
+	"net/http"
+
 	"github.com/aiops/aiops-platform/internal/agent"
 	"github.com/aiops/aiops-platform/internal/audit"
 	"github.com/aiops/aiops-platform/internal/ai"
@@ -18,6 +20,9 @@ import (
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 )
+
+// maxRequestBodySize 限制 API 请求体大小为 10MB，防止恶意大请求导致内存耗尽。
+const maxRequestBodySize = 10 << 20 // 10MB
 
 type Deps struct {
 	Health     *handler.HealthHandler
@@ -75,6 +80,12 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 
 	v1 := r.Group("/api/v1")
 	{
+		// 请求体大小限制：防止恶意大请求导致内存耗尽。
+		v1.Use(func(c *gin.Context) {
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodySize)
+			c.Next()
+		})
+
 		// API 限流中间件。
 		if deps.RateLimit != nil {
 			v1.Use(deps.RateLimit.Middleware())
@@ -185,10 +196,18 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 		}
 
 		if deps.Automation != nil {
+			// 只读操作：不需要权限控制
 			v1.GET("/automation/pods/:pod/logs", deps.Automation.GetPodLogs)
 			v1.GET("/automation/pods/:pod/events", deps.Automation.GetPodEvents)
-			v1.POST("/automation/pods/:pod/restart", deps.Automation.RestartPod)
-			v1.POST("/automation/deployments/:name/scale", deps.Automation.ScaleDeployment)
+
+			// 危险操作：必须认证 + 权限控制
+			k8sOpGroup := v1.Group("")
+			if deps.AuthService != nil {
+				k8sOpGroup.Use(auth.AuthMiddleware(deps.AuthService))
+			}
+			k8sOpGroup.POST("/automation/pods/:pod/restart", auth.RequirePermission("cluster", "write"), deps.Automation.RestartPod)
+			k8sOpGroup.POST("/automation/pods/:pod/exec", auth.RequirePermission("cluster", "write"), deps.Automation.ExecPod)
+			k8sOpGroup.POST("/automation/deployments/:name/scale", auth.RequirePermission("cluster", "write"), deps.Automation.ScaleDeployment)
 		}
 
 		if deps.AutomationAction != nil {
@@ -281,7 +300,9 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 				v1.GET("/incidents/:id/evidence", deps.IncidentRCA.GetEvidence)
 			}
 			if deps.IncidentAI != nil {
-				v1.POST("/incidents/:id/ai-analyze", deps.IncidentAI.Analyze)
+				aiAuth := v1.Group("")
+				aiAuth.Use(auth.AuthMiddleware(deps.AuthService))
+				aiAuth.POST("/incidents/:id/ai-analyze", deps.IncidentAI.Analyze)
 				v1.GET("/incidents/:id/ai-analysis", deps.IncidentAI.GetLatest)
 				v1.GET("/incidents/:id/ai-analysis/history", deps.IncidentAI.GetHistory)
 			}

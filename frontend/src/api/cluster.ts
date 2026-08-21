@@ -18,8 +18,25 @@ export interface PodMetric {
   window: string
 }
 
+export interface NamespaceItem {
+  name: string
+  status: string
+  age: string
+}
+
+export interface PodItem {
+  namespace: string
+  name: string
+  status: string
+  node?: string
+  age?: string
+  ip?: string
+}
+
 export const clusterApi = {
   list: () => request.get<any, Cluster[]>('/api/v1/clusters'),
+  listNamespaces: () => request.get<any, NamespaceItem[]>('/api/v1/namespaces'),
+  listPods: (namespace?: string) => request.get<any, PodItem[]>('/api/v1/pods', { params: namespace ? { namespace } : {} }),
   nodeMetrics: () => request.get<any, NodeMetric[]>('/api/v1/nodes/metrics'),
   podMetrics: (namespace?: string) => request.get<any, PodMetric[]>('/api/v1/pods/metrics', { params: { namespace } }),
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/aiops/aiops-platform/internal/monitoring"
@@ -173,6 +174,11 @@ func (s *Service) DetectAndPersist(ctx context.Context, req DetectRequest) (*Det
 		if metricName == "" {
 			metricName = req.RuleName
 		}
+		if metricName == "" {
+			// Prometheus 计算表达式（如 100 - avg(...)）没有 __name__ 标签，
+			// 且 RuleName 也为空时，使用查询表达式的摘要作为 metric 名。
+			metricName = "computed_metric"
+		}
 		// 从标签提取资源信息。
 		resourceName := string(stream.Metric["pod"])
 		if resourceName == "" {
@@ -189,9 +195,10 @@ func (s *Service) DetectAndPersist(ctx context.Context, req DetectRequest) (*Det
 		if cluster == "" {
 			cluster = "local"
 		}
+		// Resource Type 自动识别：优先使用请求指定的，否则根据 Prometheus 标签推断。
 		resourceType := req.ResourceType
 		if resourceType == "" {
-			resourceType = "pod"
+			resourceType = detectResourceType(stream.Metric)
 		}
 
 		points := make([]DataPoint, 0, len(stream.Values))
@@ -206,20 +213,37 @@ func (s *Service) DetectAndPersist(ctx context.Context, req DetectRequest) (*Det
 		anomalies := detector.Detect(metricName, points)
 		totalAnomalies += len(anomalies)
 
-		// 持久化每个异常点。
-		for _, a := range anomalies {
+		if s.repo != nil {
+			// 异常恢复：如果当前没有检测到异常，但之前有活跃异常，标记为已恢复。
+			if len(anomalies) == 0 {
+				if existing, err := s.repo.FindActiveByResourceAndMetric(ctx, cluster, resourceType, resourceName, metricName); err == nil && existing.ID > 0 {
+					_ = s.repo.MarkResolved(ctx, existing.ID)
+					slog.Info("anomaly recovered", "metric", metricName, "resource", resourceName)
+				}
+				continue
+			}
+
+			// 去重合并：同一资源+metric只保留最新一条异常，更新而不是新建。
+			// 取最新的异常点（时间最大的）作为当前状态。
+			latest := anomalies[len(anomalies)-1]
+			for _, a := range anomalies {
+				if a.Timestamp.After(latest.Timestamp) {
+					latest = a
+				}
+			}
+
 			rec := &AnomalyRecord{
 				Metric:       metricName,
 				ResourceType: resourceType,
 				ResourceName: resourceName,
 				Namespace:    namespace,
 				Cluster:      cluster,
-				Timestamp:    a.Timestamp,
-				Value:        a.Value,
-				AnomalyScore: a.AnomalyScore,
-				Severity:     a.Severity,
-				Algorithm:    a.Detector,
-				Reason:       a.Reason,
+				Timestamp:    latest.Timestamp,
+				Value:        latest.Value,
+				AnomalyScore: latest.AnomalyScore,
+				Severity:     latest.Severity,
+				Algorithm:    latest.Detector,
+				Reason:       latest.Reason,
 				Status:       AnomalyStatusActive,
 			}
 			// 计算 baseline（简单取窗口均值）。
@@ -234,37 +258,46 @@ func (s *Service) DetectAndPersist(ctx context.Context, req DetectRequest) (*Det
 				rec.ExpectedMax = *req.Thresholds.UpperWarning
 			}
 
-			if s.repo != nil {
-				saved, isNew, err := s.repo.Upsert(ctx, rec)
-				if err != nil {
-					slog.Warn("anomaly: persist failed", "metric", metricName, "err", err)
+			// 去重：如果已有活跃异常，更新；否则新建。
+			if existing, err := s.repo.FindActiveByResourceAndMetric(ctx, cluster, resourceType, resourceName, metricName); err == nil && existing.ID > 0 {
+				existing.Value = rec.Value
+				existing.AnomalyScore = rec.AnomalyScore
+				existing.Severity = rec.Severity
+				existing.Reason = rec.Reason
+				existing.Timestamp = rec.Timestamp
+				existing.Baseline = rec.Baseline
+				existing.ExpectedMax = rec.ExpectedMax
+				if err := s.repo.db.WithContext(ctx).Save(existing).Error; err != nil {
+					slog.Warn("anomaly: update failed", "metric", metricName, "err", err)
+				}
+				rec = existing
+			} else {
+				if err := s.repo.db.WithContext(ctx).Create(rec).Error; err != nil {
+					slog.Warn("anomaly: create failed", "metric", metricName, "err", err)
 					continue
 				}
-				if isNew {
-					savedCount++
-				}
-				rec = saved
+				savedCount++
+			}
 
-				// 严重异常进入 Incident。
-				if s.incidentSink != nil && (a.Severity == SeverityCritical || a.Severity == SeverityWarning) {
-					incidentID, err := s.incidentSink.IngestAnomalySignal(ctx, AnomalySignal{
-						ID:           rec.ID,
-						Title:        fmt.Sprintf("%s: %s", a.Severity, metricName),
-						Severity:     a.Severity,
-						Cluster:      cluster,
-						Namespace:    namespace,
-						ResourceType: resourceType,
-						ResourceName: resourceName,
-						Timestamp:    a.Timestamp,
-						Metric:       metricName,
-						Value:        a.Value,
-						AnomalyScore: a.AnomalyScore,
-						Reason:       a.Reason,
-						Algorithm:    a.Detector,
-					})
-					if err == nil && incidentID > 0 {
-						_ = s.repo.UpdateIncident(ctx, rec.ID, incidentID)
-					}
+			// 严重异常进入 Incident（仅新建时）。
+			if s.incidentSink != nil && rec.IncidentID == nil && (latest.Severity == SeverityCritical || latest.Severity == SeverityWarning) {
+				incidentID, err := s.incidentSink.IngestAnomalySignal(ctx, AnomalySignal{
+					ID:           rec.ID,
+					Title:        fmt.Sprintf("%s: %s", latest.Severity, metricName),
+					Severity:     latest.Severity,
+					Cluster:      cluster,
+					Namespace:    namespace,
+					ResourceType: resourceType,
+					ResourceName: resourceName,
+					Timestamp:    latest.Timestamp,
+					Metric:       metricName,
+					Value:        latest.Value,
+					AnomalyScore: latest.AnomalyScore,
+					Reason:       latest.Reason,
+					Algorithm:    latest.Detector,
+				})
+				if err == nil && incidentID > 0 {
+					_ = s.repo.UpdateIncident(ctx, rec.ID, incidentID)
 				}
 			}
 		}
@@ -306,4 +339,54 @@ func matrixToPoints(result *monitoring.QueryResult) ([]DataPoint, string, error)
 		})
 	}
 	return points, metricName, nil
+}
+
+// detectResourceType 根据 Prometheus 标签自动推断资源类型。
+// 优先级：pod > deployment > statefulset > daemonset > service > node > unknown
+// 不默认 pod，避免 node-exporter 等节点指标被错误标记为 pod。
+func detectResourceType(metric model.Metric) string {
+	if string(metric["pod"]) != "" {
+		return "pod"
+	}
+	if string(metric["deployment"]) != "" {
+		return "deployment"
+	}
+	if string(metric["statefulset"]) != "" {
+		return "statefulset"
+	}
+	if string(metric["daemonset"]) != "" {
+		return "daemonset"
+	}
+	if string(metric["service"]) != "" {
+		return "service"
+	}
+	if string(metric["node"]) != "" {
+		return "node"
+	}
+	// 通过 job 名称推断：node-exporter / kube-state-metrics 等。
+	job := string(metric["job"])
+	if job != "" {
+		if containsAny(job, "node", "node-exporter", "node_exporter") {
+			return "node"
+		}
+		if containsAny(job, "kube-state", "kube_state", "ksm") {
+			// kube-state-metrics 的资源类型由具体标签决定，这里默认 pod。
+			return "pod"
+		}
+	}
+	// 通过 instance 推断：如果 instance 是 IP:Port 且没有 pod 标签，可能是 node 级指标。
+	if string(metric["instance"]) != "" && string(metric["pod"]) == "" {
+		return "node"
+	}
+	return "unknown"
+}
+
+// containsAny 检查字符串是否包含任一子串。
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }

@@ -109,7 +109,7 @@ export const automationApi = {
     request.get<any, { items: any[]; total: number }>('/api/v1/automation/audit', { params }),
 
   // 旧版直接操作 API（Pod Detail / Deployment Detail 使用）
-  podLogs: (pod: string, params?: { cluster?: string; namespace?: string; container?: string; tail_lines?: number; tail?: number }) =>
+  podLogs: (pod: string, params?: { cluster?: string; namespace?: string; container?: string; tail_lines?: number; tail?: number; timestamps?: boolean }) =>
     request.get<any, string>(`/api/v1/automation/pods/${pod}/logs`, { params }),
 
   podEvents: (pod: string, params?: { cluster?: string; namespace?: string }) =>
@@ -117,6 +117,9 @@ export const automationApi = {
 
   restartPod: (pod: string, data: { cluster: string; namespace: string; confirm: boolean }) =>
     request.post<any, any>(`/api/v1/automation/pods/${pod}/restart`, data),
+
+  podExec: (pod: string, data: { cluster: string; namespace: string; container?: string; command: string[]; confirm: boolean }) =>
+    request.post<any, { stdout: string; stderr: string; exit_code: number }>(`/api/v1/automation/pods/${pod}/exec`, data),
 
   scaleDeployment: (name: string, data: { cluster: string; namespace: string; replicas: number; confirm: boolean }) =>
     request.post<any, any>(`/api/v1/automation/deployments/${name}/scale`, data),

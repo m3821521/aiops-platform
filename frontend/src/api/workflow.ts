@@ -40,6 +40,40 @@ export interface Workflow {
   updated_at: string
 }
 
+export interface WorkflowStepExecution {
+  id: number
+  workflow_execution_id: number
+  workflow_step_id: number
+  step_name: string
+  step_type: string
+  action_type?: string
+  status: string
+  attempt: number
+  started_at?: string
+  finished_at?: string
+  duration_ms: number
+  result?: string
+  error?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface WorkflowExecution {
+  id: number
+  workflow_id: number
+  status: string
+  trigger_type?: string
+  triggered_by: number
+  started_at?: string
+  finished_at?: string
+  duration_ms: number
+  error?: string
+  result?: string
+  step_executions?: WorkflowStepExecution[]
+  created_at: string
+  updated_at: string
+}
+
 export const workflowApi = {
   create: (data: { name: string; description?: string; incident_id?: number; risk?: string; steps: Partial<WorkflowStep>[] }) =>
     request.post<any, Workflow>('/api/v1/workflows', data),
@@ -56,4 +90,10 @@ export const workflowApi = {
   execute: (id: number) => request.post<any, Workflow>(`/api/v1/workflows/${id}/execute`),
 
   cancel: (id: number) => request.post<any, Workflow>(`/api/v1/workflows/${id}/cancel`),
+
+  listExecutions: (workflowId: number, params?: { page?: number; page_size?: number }) =>
+    request.get<any, { items: WorkflowExecution[]; total: number; page: number; page_size: number }>(`/api/v1/workflows/${workflowId}/executions`, { params }),
+
+  getExecution: (executionId: number) =>
+    request.get<any, WorkflowExecution>(`/api/v1/workflow-executions/${executionId}`),
 }

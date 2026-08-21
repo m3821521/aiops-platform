@@ -30,8 +30,9 @@ func (h *AutomationHandler) GetPodLogs(c *gin.Context) {
 			tail = v
 		}
 	}
+	timestamps := c.DefaultQuery("timestamps", "true") == "true"
 
-	logs, err := h.Engine.GetPodLogs(c.Request.Context(), cluster, namespace, pod, container, tail)
+	logs, err := h.Engine.GetPodLogs(c.Request.Context(), cluster, namespace, pod, container, tail, timestamps)
 	if err != nil {
 		response.Internal(c, "获取 Pod 日志失败: "+err.Error())
 		return
@@ -58,6 +59,45 @@ func (h *AutomationHandler) GetPodEvents(c *gin.Context) {
 	}
 
 	response.OK(c, events)
+}
+
+// execRequest 执行 Pod 命令请求体。
+type execRequest struct {
+	Cluster   string   `json:"cluster"`
+	Namespace string   `json:"namespace"`
+	Container string   `json:"container"`
+	Command   []string `json:"command"`
+	Confirm   bool     `json:"confirm"`
+}
+
+// ExecPod 处理 POST /api/v1/automation/pods/:pod/exec
+func (h *AutomationHandler) ExecPod(c *gin.Context) {
+	if h.Engine == nil {
+		response.Internal(c, "自动化引擎未初始化")
+		return
+	}
+
+	pod := c.Param("pod")
+	var req execRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "请求体格式错误: "+err.Error())
+		return
+	}
+	if req.Namespace == "" {
+		req.Namespace = "default"
+	}
+	if len(req.Command) == 0 {
+		response.BadRequest(c, "command 不能为空")
+		return
+	}
+
+	result, err := h.Engine.ExecPod(c.Request.Context(), req.Cluster, req.Namespace, pod, req.Container, req.Command, req.Confirm)
+	if err != nil {
+		response.Internal(c, "执行命令失败: "+err.Error())
+		return
+	}
+
+	response.OK(c, result)
 }
 
 // restartRequest 重启 Pod 请求体。

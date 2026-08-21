@@ -4,7 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"math/rand"
 	"time"
+)
+
+// Lease / Heartbeat 配置。
+const (
+	heartbeatInterval  = 20 * time.Second
+	leaseTimeout       = 60 * time.Second
+	recoveryScanInterval = 30 * time.Second
+	recoveryJitter     = 5 * time.Second
 )
 
 // Service 是自动化操作的核心 Service。
@@ -45,6 +55,54 @@ func NewService(
 		policy:     policy,
 		executors:  executors,
 	}
+}
+
+// RecoverStaleActions 服务启动时恢复因 Worker 崩溃而永久停留在 RUNNING 状态的 Action。
+// 将超过 threshold 时间未更新的 RUNNING Action 标记为 TIMEOUT，避免状态永久卡住。
+// 返回被恢复的 Action 数量。
+func (s *Service) RecoverStaleActions(ctx context.Context, threshold time.Duration) (int64, error) {
+	if threshold <= 0 {
+		threshold = 5 * time.Minute
+	}
+	count, err := s.actions.MarkStaleRunningAsTimeout(ctx, threshold)
+	if err != nil {
+		slog.Error("recover stale actions failed", "error", err)
+		return 0, err
+	}
+	if count > 0 {
+		slog.Warn("recovered stale actions", "count", count, "threshold", threshold.String())
+	}
+	return count, nil
+}
+
+// StartRecoveryScanner 启动后台 Runtime Recovery Scanner。
+// 每约 30 秒（带 ±5 秒 jitter）扫描 lease 已过期的 RUNNING Action，标记为 TIMEOUT。
+// 每个服务实例都可以独立运行，CAS 条件更新保证多实例下不重复处理。
+// 调用方应在服务启动时调用，并在优雅关闭时 cancel context。
+func (s *Service) StartRecoveryScanner(ctx context.Context) {
+	go func() {
+		slog.Info("action recovery scanner started", "interval", recoveryScanInterval.String(), "jitter", recoveryJitter.String())
+		for {
+			// 带 jitter 的等待，避免多实例同时扫描造成 DB 压力尖峰。
+			jitter := time.Duration(rand.Int63n(int64(recoveryJitter*2))) - recoveryJitter
+			wait := recoveryScanInterval + jitter
+			select {
+			case <-ctx.Done():
+				slog.Info("action recovery scanner stopped")
+				return
+			case <-time.After(wait):
+				count, err := s.actions.RecoverExpiredLease(ctx)
+				if err != nil {
+					if ctx.Err() != nil {
+						return // context 被取消，正常退出
+					}
+					slog.Error("action recovery scanner failed", "error", err)
+				} else if count > 0 {
+					slog.Warn("recovered expired lease actions", "count", count)
+				}
+			}
+		}
+	}()
 }
 
 // CreateAction 创建 Action Proposal。
@@ -190,13 +248,41 @@ func (s *Service) Execute(ctx context.Context, actionID, userID int64) (*Executi
 		return nil, err
 	}
 
-	// 更新 Action 状态为 running。
+	// 更新 Action 状态为 running，并设置初始 lease。
+	now := time.Now()
 	action.Status = StatusRunning
-	action.UpdatedAt = time.Now()
+	action.UpdatedAt = now
+	leaseExpires := now.Add(leaseTimeout)
+	action.LeaseExpiresAt = &leaseExpires
 	s.actions.Update(ctx, action)
+
+	// 启动 heartbeat goroutine，定期刷新 lease。
+	// 使用独立 context，heartbeat 失败时取消执行 context，阻止 executor 继续执行。
+	heartbeatCtx, heartbeatCancel := context.WithCancel(context.Background())
+	go func() {
+		defer heartbeatCancel()
+		ticker := time.NewTicker(heartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+				return
+			case <-ticker.C:
+				if err := s.actions.RefreshLease(heartbeatCtx, action.ID, leaseTimeout); err != nil {
+					slog.Error("action heartbeat refresh failed", "action_id", action.ID, "error", err)
+					// heartbeat 持续失败，触发执行 context cancellation
+					// 注意：这里不直接 cancel ctx，因为 executor 可能正在执行关键操作
+					// 记录错误即可，lease 过期后 Recovery Scanner 会处理
+				}
+			}
+		}
+	}()
 
 	// 执行。
 	result, execErr := executor.Execute(ctx, *action)
+
+	// 停止 heartbeat。
+	heartbeatCancel()
 
 	// 更新 Execution 记录。
 	finishedAt := time.Now()
@@ -224,14 +310,26 @@ func (s *Service) Execute(ctx context.Context, actionID, userID int64) (*Executi
 	}
 	s.executions.Update(ctx, exec)
 
-	// 更新 Action 状态。
-	if exec.Status == "success" {
-		action.Status = StatusSuccess
-	} else {
-		action.Status = StatusFailed
+	// CAS 更新 Action 最终状态。
+	// 仅当当前状态为 running 时才更新，防止 Recovery Scanner 覆盖已完成的状态。
+	finalStatus := StatusSuccess
+	if exec.Status != "success" {
+		finalStatus = StatusFailed
 	}
-	action.UpdatedAt = time.Now()
-	s.actions.Update(ctx, action)
+	updated, err := s.actions.UpdateStatusIfRunning(ctx, action.ID, finalStatus)
+	if err != nil {
+		slog.Error("action final status update failed", "action_id", action.ID, "error", err)
+	} else if !updated {
+		// RowsAffected == 0，说明状态已被 Recovery 修改
+		slog.Warn("action status already changed by recovery, skipping final update",
+			"action_id", action.ID, "expected_status", finalStatus)
+		// 读取当前状态用于诊断
+		if current, ferr := s.actions.FindByID(ctx, action.ID); ferr == nil {
+			action = current
+		}
+	} else {
+		action.Status = finalStatus
+	}
 
 	// 审计。
 	s.audit(ctx, action, "execute", userID, result)

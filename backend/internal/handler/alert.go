@@ -86,12 +86,23 @@ func alertToSignal(a *alert.Alert, webhookStatus string) incident.Signal {
 		resourceType = incident.ResourceService
 		resourceName = a.Service
 	}
+
+	// 从 Alert Labels 动态提取 cluster，优先级：cluster > cluster_name
+	cluster := ""
+	if a.Labels != nil {
+		if v, ok := a.Labels["cluster"]; ok && v != "" {
+			cluster = v
+		} else if v, ok := a.Labels["cluster_name"]; ok && v != "" {
+			cluster = v
+		}
+	}
+
 	return incident.Signal{
 		SignalType:   incident.SignalAlert,
 		SignalID:     a.Fingerprint,
 		Title:        a.Alertname,
 		Severity:     a.Severity,
-		Cluster:      "local", // 当前单集群，未来从 alert labels 提取
+		Cluster:      cluster,
 		Namespace:    a.Namespace,
 		Service:      a.Service,
 		ResourceType: resourceType,

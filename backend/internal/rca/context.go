@@ -82,71 +82,84 @@ type IncidentContext struct {
 	Metrics   []MetricInfo
 	Logs      []LogInfo
 	Topology  TopologyInfo
+	PodResourceState *PodResourceState
 }
 
 // AnomalyInfo 是异常信息（简化版，不依赖 anomaly 包避免循环引用）。
 type AnomalyInfo struct {
-	ID           int64
-	Metric       string
-	ResourceType string
-	ResourceName string
-	Namespace    string
-	Timestamp    time.Time
-	Value        float64
-	Baseline     float64
-	AnomalyScore float64
-	Severity     string
-	Algorithm    string
-	Reason       string
+	ID           int64   `json:"id"`
+	Metric       string  `json:"metric"`
+	ResourceType string  `json:"resource_type"`
+	ResourceName string  `json:"resource_name"`
+	Namespace    string  `json:"namespace,omitempty"`
+	Timestamp    time.Time `json:"timestamp"`
+	Value        float64 `json:"value"`
+	Baseline     float64 `json:"baseline"`
+	AnomalyScore float64 `json:"anomaly_score"`
+	Severity     string  `json:"severity"`
+	Algorithm    string  `json:"algorithm,omitempty"`
+	Reason       string  `json:"reason,omitempty"`
 }
 
 // EventInfo 是 Kubernetes Event 信息。
 type EventInfo struct {
-	Type         string    // Normal/Warning
-	Reason       string    // OOMKilled, FailedScheduling 等
-	Message      string
-	ResourceType string
-	ResourceName string
-	Namespace    string
-	Timestamp    time.Time
-	Count        int32
+	Type         string    `json:"type"` // Normal/Warning
+	Reason       string    `json:"reason"` // OOMKilled, FailedScheduling 等
+	Message      string    `json:"message"`
+	ResourceType string    `json:"resource_type"`
+	ResourceName string    `json:"resource_name"`
+	Namespace    string    `json:"namespace,omitempty"`
+	Timestamp    time.Time `json:"timestamp"`
+	Count        int32     `json:"count"`
 }
 
 // MetricInfo 是指标信息。
 type MetricInfo struct {
-	Metric    string
-	Value     float64
-	Timestamp time.Time
-	Resource  string
+	Metric    string            `json:"metric"`
+	Value     float64           `json:"value"`
+	Timestamp time.Time         `json:"timestamp"`
+	Resource  string            `json:"resource"`
+	Unit      string            `json:"unit,omitempty"`
+	Labels    map[string]string `json:"labels,omitempty"`
+	// 时间序列数据（Before/During/After）
+	Before []MetricDataPoint `json:"before,omitempty"`
+	During []MetricDataPoint `json:"during,omitempty"`
+	After  []MetricDataPoint `json:"after,omitempty"`
+}
+
+// MetricDataPoint 是指标时间序列数据点。
+type MetricDataPoint struct {
+	Timestamp time.Time `json:"timestamp"`
+	Value     float64   `json:"value"`
 }
 
 // LogInfo 是日志信息。
 type LogInfo struct {
-	Timestamp time.Time
-	Level     string
-	Message   string
-	Pod       string
-	Namespace string
+	Timestamp time.Time `json:"timestamp"`
+	Level     string    `json:"level"`
+	Message   string    `json:"message"`
+	Pod       string    `json:"pod"`
+	Namespace string    `json:"namespace"`
 }
 
 // TopologyInfo 是拓扑信息（简化版）。
 type TopologyInfo struct {
-	Nodes []TopologyNodeInfo
-	Edges []TopologyEdgeInfo
+	Nodes []TopologyNodeInfo `json:"nodes"`
+	Edges []TopologyEdgeInfo `json:"edges"`
 }
 
 type TopologyNodeInfo struct {
-	ID        string
-	Type      string
-	Name      string
-	Namespace string
-	Status    string
+	ID        string `json:"id"`
+	Type      string `json:"type"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace,omitempty"`
+	Status    string `json:"status,omitempty"`
 }
 
 type TopologyEdgeInfo struct {
-	Source   string
-	Target   string
-	Relation string
+	Source   string `json:"source"`
+	Target   string `json:"target"`
+	Relation string `json:"relation"`
 }
 
 // RCAResult 是 RCA 分析结果（新版）。

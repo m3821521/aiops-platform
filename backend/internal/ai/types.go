@@ -32,8 +32,11 @@ type AIContext struct {
 	Metrics      []MetricSummary    `json:"metrics,omitempty"`
 	Logs         []LogSummary       `json:"logs,omitempty"`
 	Events       []EventSummary     `json:"events,omitempty"`
-	Topology     *TopologySummary   `json:"topology,omitempty"`
-	DataSources  DataSourceStatus   `json:"data_sources"`
+	Topology     *TopologySummary       `json:"topology,omitempty"`
+	PodDiagnostic        *PodDiagnosticSummary        `json:"pod_diagnostic,omitempty"`
+	DeploymentDiagnostic *DeploymentDiagnosticSummary `json:"deployment_diagnostic,omitempty"`
+	ServiceDiagnostic    *ServiceDiagnosticSummary    `json:"service_diagnostic,omitempty"`
+	DataSources          DataSourceStatus              `json:"data_sources"`
 }
 
 // RCASummary 是 RCA 结果摘要。
@@ -46,6 +49,7 @@ type RCASummary struct {
 
 // AlertSummary 是告警摘要。
 type AlertSummary struct {
+	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	Severity  string    `json:"severity"`
 	Service   string    `json:"service,omitempty"`
@@ -57,6 +61,7 @@ type AlertSummary struct {
 
 // AnomalySummary 是异常摘要。
 type AnomalySummary struct {
+	ID           string    `json:"id"`
 	Metric       string    `json:"metric"`
 	ResourceType string    `json:"resource_type"`
 	ResourceName string    `json:"resource_name"`
@@ -71,14 +76,16 @@ type AnomalySummary struct {
 
 // MetricSummary 是指标摘要。
 type MetricSummary struct {
-	Metric   string    `json:"metric"`
-	Value    float64   `json:"value"`
-	Resource string    `json:"resource"`
+	ID        string    `json:"id"`
+	Metric    string    `json:"metric"`
+	Value     float64   `json:"value"`
+	Resource  string    `json:"resource"`
 	Timestamp time.Time `json:"timestamp"`
 }
 
 // LogSummary 是日志摘要。
 type LogSummary struct {
+	ID        string    `json:"id"`
 	Timestamp time.Time `json:"timestamp"`
 	Level     string    `json:"level"`
 	Message   string    `json:"message"`
@@ -88,6 +95,7 @@ type LogSummary struct {
 
 // EventSummary 是 Kubernetes Event 摘要。
 type EventSummary struct {
+	ID           string    `json:"id"`
 	Type         string    `json:"type"` // Normal/Warning
 	Reason       string    `json:"reason"`
 	Message      string    `json:"message"`
@@ -96,6 +104,78 @@ type EventSummary struct {
 	Namespace    string    `json:"namespace,omitempty"`
 	Timestamp    time.Time `json:"timestamp"`
 	Count        int32     `json:"count"`
+}
+
+// PodDiagnosticSummary 是 Pod 诊断信息摘要（用于 AI RCA）。
+type PodDiagnosticSummary struct {
+	ID           string                   `json:"id"`
+	Namespace    string                   `json:"namespace"`
+	Pod          string                   `json:"pod"`
+	PodUID       string                   `json:"pod_uid,omitempty"` // Pod UID，用于 Historical State 关联
+	Phase        string                   `json:"phase"`
+	Ready        bool                     `json:"ready"`
+	RestartCount int32                    `json:"restart_count"`
+	NodeName     string                   `json:"node_name,omitempty"`
+	StartTime    string                   `json:"start_time,omitempty"`
+	Containers   []PodContainerDiagnostic `json:"containers"`
+}
+
+// PodContainerDiagnostic 是容器诊断信息摘要。
+type PodContainerDiagnostic struct {
+	Name           string `json:"name"`
+	Ready          bool   `json:"ready"`
+	RestartCount   int32  `json:"restart_count"`
+	State          string `json:"state"` // running/waiting/terminated/unknown
+	Reason         string `json:"reason,omitempty"`
+	Message        string `json:"message,omitempty"`
+	ExitCode       *int32 `json:"exit_code,omitempty"`
+	StartedAt      string `json:"started_at,omitempty"`
+	FinishedAt     string `json:"finished_at,omitempty"`
+	LastState      string `json:"last_state,omitempty"`
+	LastReason     string `json:"last_reason,omitempty"`
+	LastExitCode   *int32 `json:"last_exit_code,omitempty"`
+	LastStartedAt  string `json:"last_started_at,omitempty"`
+	LastFinishedAt string `json:"last_finished_at,omitempty"`
+}
+
+// DeploymentDiagnosticSummary 是 Deployment 诊断信息摘要（用于 AI RCA）。
+type DeploymentDiagnosticSummary struct {
+	ID                string `json:"id"`
+	Namespace         string `json:"namespace"`
+	Deployment        string `json:"deployment"`
+	Replicas          int32  `json:"replicas"`           // desired replicas
+	AvailableReplicas int32  `json:"available_replicas"` // available replicas
+	ReadyReplicas     int32  `json:"ready_replicas"`     // ready replicas
+	UpdatedReplicas   int32  `json:"updated_replicas"`   // updated replicas
+	UnavailableReplicas int32 `json:"unavailable_replicas"` // unavailable replicas
+	Condition         string `json:"condition,omitempty"` // Available/Progressing condition
+	ConditionReason   string `json:"condition_reason,omitempty"`
+	ConditionMessage  string `json:"condition_message,omitempty"`
+}
+
+// ServiceDiagnosticSummary 是 Service 诊断信息摘要（用于 AI RCA）。
+type ServiceDiagnosticSummary struct {
+	ID                   string            `json:"id"`
+	Namespace            string            `json:"namespace"`
+	ServiceName          string            `json:"service_name"`
+	ServiceType          string            `json:"service_type,omitempty"`
+	ClusterIP            string            `json:"cluster_ip,omitempty"`
+	Ports                []ServicePortInfo `json:"ports,omitempty"`
+	Selector             map[string]string `json:"selector,omitempty"`
+	SelectorMatchStatus  string            `json:"selector_match_status"`  // matched/no_pods_matched/no_ready_pods
+	MatchedPodCount      int32             `json:"matched_pod_count"`
+	ReadyMatchedPodCount int32             `json:"ready_matched_pod_count"`
+	EndpointCount        int32             `json:"endpoint_count"`
+	ReadyEndpointCount   int32             `json:"ready_endpoint_count"`
+	EndpointAddresses    []string          `json:"endpoint_addresses,omitempty"`
+}
+
+// ServicePortInfo 是 Service 端口信息。
+type ServicePortInfo struct {
+	Name       string `json:"name,omitempty"`
+	Port       int32  `json:"port"`
+	TargetPort string `json:"target_port,omitempty"`
+	Protocol   string `json:"protocol,omitempty"`
 }
 
 // TopologySummary 是拓扑摘要（只保留 Incident 相关子图）。
@@ -122,6 +202,7 @@ type TopologyEdgeInfo struct {
 
 // AIEvidence 是 AI 输出的证据（必须来自 Context，禁止编造）。
 type AIEvidence struct {
+	ID          string `json:"id"` // 必须匹配 Context 中的 Evidence ID
 	Type        string `json:"type"` // alert/anomaly/metric/log/event/topology
 	Source      string `json:"source"`
 	Resource    string `json:"resource,omitempty"`
@@ -145,7 +226,7 @@ type Recommendation struct {
 	Description string                 `json:"description"`
 	Reason      string                 `json:"reason"`
 	Risk        string                 `json:"risk"`        // low/medium/high/critical
-	ActionType  string                 `json:"action_type"` // observe/investigate/restart/scale/rollback/config_change/network_check
+	ActionType  string                 `json:"action_type"` // restart_pod/scale_deployment/jenkins_build/argocd_sync
 	Target      string                 `json:"target"`      // 目标资源，如 pod名称/deployment名称
 	Namespace   string                 `json:"namespace"`   // 命名空间
 	Parameters  map[string]interface{} `json:"parameters"`  // 操作参数，如 replicas: 3
@@ -178,4 +259,5 @@ type AIAnalysisResult struct {
 	DataSources         DataSourceStatus `json:"data_sources"`
 	GeneratedAt         time.Time        `json:"generated_at"`
 	Model               string           `json:"model,omitempty"`
+	CreatedActions      []CreatedAction  `json:"created_actions,omitempty"` // AI 自动创建的 Action
 }

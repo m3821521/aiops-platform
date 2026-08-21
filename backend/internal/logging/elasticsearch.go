@@ -203,15 +203,21 @@ func buildQueryDSL(q SearchQuery) esQuery {
 		})
 	}
 
-	// 日志级别过滤。
+	// 日志级别过滤（兼容多种字段名和大小写）。
 	if q.Level != "" {
+		levelUpper := strings.ToUpper(q.Level)
+		levelLower := strings.ToLower(q.Level)
+		levelFields := []string{"log.level", "log.level.keyword", "level", "level.keyword"}
+		var levelShould []map[string]interface{}
+		for _, field := range levelFields {
+			levelShould = append(levelShould,
+				map[string]interface{}{"term": map[string]interface{}{field: levelUpper}},
+				map[string]interface{}{"term": map[string]interface{}{field: levelLower}},
+			)
+		}
 		filter = append(filter, map[string]interface{}{
 			"bool": map[string]interface{}{
-				"should": []map[string]interface{}{
-					{"term": map[string]string{"log.level.keyword": q.Level}},
-					{"term": map[string]string{"level": q.Level}},
-					{"term": map[string]string{"level.keyword": q.Level}},
-				},
+				"should":               levelShould,
 				"minimum_should_match": 1,
 			},
 		})
@@ -309,10 +315,15 @@ func parseSearchResponse(data []byte) (*SearchResult, error) {
 		if v, ok := h.Source["message"].(string); ok {
 			hit.Message = v
 		}
-		// 兼容多种 level 字段。
-		if v, ok := h.Source["log"].(map[string]interface{}); ok {
-			if l, ok := v["level"].(string); ok {
-				hit.Level = l
+		// 兼容多种 level 字段（扁平 log.level 和嵌套 log.level）。
+		if v, ok := h.Source["log.level"].(string); ok {
+			hit.Level = v
+		}
+		if hit.Level == "" {
+			if v, ok := h.Source["log"].(map[string]interface{}); ok {
+				if l, ok := v["level"].(string); ok {
+					hit.Level = l
+				}
 			}
 		}
 		if hit.Level == "" {

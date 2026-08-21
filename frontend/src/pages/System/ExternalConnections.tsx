@@ -25,6 +25,7 @@ const CONNECTION_TYPES = [
   { value: 'grafana', label: 'Grafana', color: 'geekblue' },
   { value: 'mysql', label: 'MySQL', color: 'cyan' },
   { value: 'redis', label: 'Redis', color: 'magenta' },
+  { value: 'docker', label: 'Docker', color: 'volcano' },
 ];
 
 const ENVIRONMENTS = [

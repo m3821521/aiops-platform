@@ -29,7 +29,7 @@ func ValidateAIAnalysisResult(result *AIAnalysisResult) error {
 	}
 	// 验证 Recommendation 的 priority 和 action_type。
 	validPriorities := map[string]bool{"P0": true, "P1": true, "P2": true, "P3": true}
-	validActions := map[string]bool{"observe": true, "investigate": true, "restart": true, "scale": true, "rollback": true, "config_change": true, "network_check": true}
+	validActions := map[string]bool{"restart_pod": true, "scale_deployment": true, "jenkins_build": true, "argocd_sync": true}
 	for i, r := range result.Recommendations {
 		if !validPriorities[r.Priority] {
 			return fmt.Errorf("recommendation[%d].priority 非法: %s", i, r.Priority)

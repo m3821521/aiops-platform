@@ -41,6 +41,29 @@ const actionTypeLabel: Record<string, string> = {
   argocd_sync: 'ArgoCD 同步',
 }
 
+// 生成操作对应的执行命令，供审批者查看
+const generateActionCommand = (action: AutomationAction): string => {
+  const ns = action.namespace ? `-n ${action.namespace}` : ''
+  switch (action.action_type) {
+    case 'restart_pod':
+      return `kubectl delete pod ${action.target_name} ${ns}`.trim()
+    case 'scale_deployment': {
+      let replicas = ''
+      try {
+        const params = typeof action.parameters === 'string' ? JSON.parse(action.parameters) : action.parameters
+        if (params?.replicas !== undefined) replicas = `--replicas=${params.replicas}`
+      } catch { /* ignore */ }
+      return `kubectl scale deployment ${action.target_name} ${replicas} ${ns}`.replace(/\s+/g, ' ').trim()
+    }
+    case 'jenkins_build':
+      return `jenkins build ${action.target_name}`
+    case 'argocd_sync':
+      return `argocd app sync ${action.target_name}`
+    default:
+      return action.action_type
+  }
+}
+
 export default function AutomationActions() {
   const navigate = useNavigate()
   const [actions, setActions] = useState<AutomationAction[]>([])
@@ -328,9 +351,11 @@ export default function AutomationActions() {
     {
       title: '目标',
       dataIndex: 'target_name',
+      width: 240,
+      ellipsis: true,
       render: (name: string, record: AutomationAction) => (
-        <Space size={4}>
-          <Text strong>{name}</Text>
+        <Space size={4} wrap>
+          <Text strong style={{ fontSize: 12 }}>{name}</Text>
           {record.namespace && <Tag style={{ fontSize: 10 }}>{record.namespace}</Tag>}
         </Space>
       ),
@@ -356,6 +381,7 @@ export default function AutomationActions() {
     {
       title: '原因',
       dataIndex: 'reason',
+      width: 200,
       ellipsis: true,
     },
     {
@@ -456,6 +482,27 @@ export default function AutomationActions() {
       >
         {detail && (
           <div>
+            {/* 执行命令预览 - 审批者重点关注 */}
+            <Alert
+              type="warning"
+              showIcon
+              icon={<ThunderboltOutlined />}
+              message="即将执行的命令"
+              description={
+                <div>
+                  <Text code copyable style={{ fontSize: 13, background: 'rgba(0,0,0,0.06)', padding: '4px 8px', borderRadius: 4, display: 'block', marginTop: 4 }}>
+                    {generateActionCommand(detail)}
+                  </Text>
+                  <div style={{ marginTop: 8, fontSize: 12, color: '#666' }}>
+                    操作类型: <Tag color="blue" style={{ fontSize: 10 }}>{actionTypeLabel[detail.action_type] || detail.action_type}</Tag>
+                    目标: <Text strong style={{ fontSize: 12 }}>{detail.target_name}</Text>
+                    {detail.namespace && <span style={{ marginLeft: 8 }}>命名空间: <Text code style={{ fontSize: 12 }}>{detail.namespace}</Text></span>}
+                  </div>
+                </div>
+              }
+              style={{ marginBottom: 16 }}
+            />
+
             <Descriptions column={1} size="small" bordered>
               <Descriptions.Item label="状态">
                 <Badge color={statusColor[detail.status]} text={detail.status} />
@@ -466,6 +513,9 @@ export default function AutomationActions() {
               <Descriptions.Item label="目标">{detail.target_name}</Descriptions.Item>
               <Descriptions.Item label="命名空间">{detail.namespace || '-'}</Descriptions.Item>
               <Descriptions.Item label="集群">{detail.cluster}</Descriptions.Item>
+              <Descriptions.Item label="执行命令">
+                <Text code copyable style={{ fontSize: 12 }}>{generateActionCommand(detail)}</Text>
+              </Descriptions.Item>
               <Descriptions.Item label="原因">{detail.reason || '-'}</Descriptions.Item>
               <Descriptions.Item label="关联事件">
                 {detail.incident_id ? `#${detail.incident_id}` : '-'}

@@ -469,6 +469,7 @@ export interface AIAnalysisResult {
 }
 
 export interface AIEvidence {
+  id?: string
   type: string
   source: string
   resource?: string

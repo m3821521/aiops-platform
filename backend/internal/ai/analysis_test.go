@@ -44,7 +44,7 @@ func TestParseAIAnalysisResult_ValidJSON(t *testing.T) {
 		"confidence": 0.85,
 		"evidence": [{"type": "event", "source": "k8s", "description": "OOMKilled", "importance": "high"}],
 		"impact": [],
-		"recommendations": [{"priority": "P1", "title": "Check memory", "description": "desc", "reason": "OOM", "risk": "low", "action_type": "investigate"}],
+		"recommendations": [{"priority": "P1", "title": "Check memory", "description": "desc", "reason": "OOM", "risk": "low", "action_type": "restart_pod"}],
 		"risks": [{"level": "medium", "description": "risk"}],
 		"next_actions": [{"order": 1, "title": "Check logs", "description": "desc", "reason": "need info"}]
 	}`
@@ -61,7 +61,7 @@ func TestParseAIAnalysisResult_ValidJSON(t *testing.T) {
 }
 
 func TestParseAIAnalysisResult_MarkdownWrapped(t *testing.T) {
-	raw := "```json\n{\"summary\": \"test\", \"root_cause_explanation\": \"exp\", \"confidence\": 0.5, \"evidence\": [], \"impact\": [], \"recommendations\": [{\"priority\": \"P2\", \"title\": \"t\", \"description\": \"d\", \"reason\": \"r\", \"risk\": \"low\", \"action_type\": \"observe\"}], \"risks\": [], \"next_actions\": []}\n```"
+	raw := "```json\n{\"summary\": \"test\", \"root_cause_explanation\": \"exp\", \"confidence\": 0.5, \"evidence\": [], \"impact\": [], \"recommendations\": [{\"priority\": \"P2\", \"title\": \"t\", \"description\": \"d\", \"reason\": \"r\", \"risk\": \"low\", \"action_type\": \"scale_deployment\"}], \"risks\": [], \"next_actions\": []}\n```"
 	result, err := ParseAIAnalysisResult(raw)
 	if err != nil {
 		t.Fatalf("parse failed: %v", err)
@@ -112,9 +112,18 @@ func TestAnalysisService_ContextProviderNil(t *testing.T) {
 }
 
 func TestAnalysisService_Success(t *testing.T) {
-	validJSON := `{"summary": "Pod restart due to OOM", "root_cause_explanation": "Memory pressure caused OOMKilled", "confidence": 0.82, "evidence": [{"type": "event", "source": "k8s", "description": "OOMKilled", "importance": "high"}, {"type": "anomaly", "source": "prometheus", "description": "memory 95%", "importance": "high"}], "impact": [{"resource_type": "pod", "resource_name": "order-1", "impact_level": "critical"}], "recommendations": [{"priority": "P1", "title": "Increase memory limit", "description": "desc", "reason": "OOM", "risk": "medium", "action_type": "config_change"}], "risks": [{"level": "medium", "description": "restart may cause downtime"}], "next_actions": [{"order": 1, "title": "Check logs", "description": "desc", "reason": "need info"}]}`
+	validJSON := `{"summary": "Pod restart due to OOM", "root_cause_explanation": "Memory pressure caused OOMKilled", "confidence": 0.82, "evidence": [{"id": "E-test001", "type": "event", "source": "k8s", "description": "OOMKilled", "importance": "high"}, {"id": "E-test002", "type": "anomaly", "source": "prometheus", "description": "memory 95%", "importance": "high"}], "impact": [{"resource_type": "pod", "resource_name": "order-1", "impact_level": "critical"}], "recommendations": [{"priority": "P1", "title": "Increase memory limit", "description": "desc", "reason": "OOM", "risk": "medium", "action_type": "scale_deployment"}], "risks": [{"level": "medium", "description": "restart may cause downtime"}], "next_actions": [{"order": 1, "title": "Check logs", "description": "desc", "reason": "need info"}]}`
 	svc := NewAnalysisService(&mockProvider{response: validJSON}, &mockContextProvider{
-		ctx: &AIContext{IncidentID: 1, DataSources: DataSourceStatus{AlertsAvailable: true}},
+		ctx: &AIContext{
+			IncidentID: 1,
+			Alerts: []AlertSummary{
+				{ID: "E-test001", Name: "PodOOMKilled", Severity: "critical"},
+			},
+			Anomalies: []AnomalySummary{
+				{ID: "E-test002", Metric: "memory_usage", Severity: "critical"},
+			},
+			DataSources: DataSourceStatus{AlertsAvailable: true},
+		},
 	}, 10)
 
 	result, err := svc.AnalyzeIncident(context.Background(), 1)
