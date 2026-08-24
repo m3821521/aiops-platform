@@ -1,5 +1,5 @@
 import request from './client'
-import type { Alert, AlertGroup, PageResult } from '@/types'
+import type { Alert, AlertGroup, PageResult, NoiseResult } from '@/types'
 
 export const alertsApi = {
   list: (params: {
@@ -14,6 +14,6 @@ export const alertsApi = {
   resolve: (id: number) => request.post(`/api/v1/alerts/${id}/resolve`),
   aggregate: (dimension?: string) =>
     request.get<any, AlertGroup[]>('/api/v1/alerts/aggregate', { params: { dimension } }),
-  noise: (window?: string) =>
-    request.get('/api/v1/alerts/noise', { params: { window } }),
+  noise: (dimension?: string) =>
+    request.get<any, NoiseResult>('/api/v1/alerts/noise', { params: { dimension } }),
 }

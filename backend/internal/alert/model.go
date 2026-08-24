@@ -72,6 +72,10 @@ type Alert struct {
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
 	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+	// IncidentIDs 是非持久化字段，通过 incident_signals 表关联查询得到。
+	// 关系：Alert.Fingerprint = IncidentSignal.SignalID (signal_type='alert')。
+	// 一个 Alert 可能关联多个 Incident。
+	IncidentIDs []int64 `gorm:"-" json:"incident_ids,omitempty"`
 }
 
 // TableName 指定表名。

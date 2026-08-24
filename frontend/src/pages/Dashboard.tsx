@@ -75,6 +75,19 @@ export default function Dashboard() {
   const [workflows, setWorkflows] = useState<Workflow[]>([])
   const [workflowsLoading, setWorkflowsLoading] = useState(false)
 
+  // === KPI Totals（全量统计，使用 API total，不受 page_size 限制）===
+  const [kpiTotals, setKpiTotals] = useState({
+    // Incident: status × severity
+    openCritical: 0, openWarning: 0, openInfo: 0,
+    ackCritical: 0, ackWarning: 0, ackInfo: 0,
+    // Action
+    runningActions: 0, failedActions: 0,
+    // Workflow
+    runningWorkflows: 0, failedWorkflows: 0,
+    // Alert
+    criticalAlerts: 0,
+  })
+
   // === Infrastructure Data (保留现有) ===
   const [clusters, setClusters] = useState<Cluster[]>([])
   const [nodes, setNodes] = useState<Node[]>([])
@@ -146,6 +159,48 @@ export default function Dashboard() {
       .finally(() => { if (token === refreshTokenRef.current) setWorkflowsLoading(false) })
 
     await Promise.allSettled([incidentPromise, actionPromise, workflowPromise])
+
+    // === KPI 全量统计（使用 status/severity filter + page_size=1，读取 total）===
+    // 不受 page_size 限制，企业级大数据量下仍准确
+    const kpiRequests = [
+      // Incident: status=open × severity
+      incidentApi.list({ page: 1, page_size: 1, status: 'open', severity: 'critical' }),
+      incidentApi.list({ page: 1, page_size: 1, status: 'open', severity: 'warning' }),
+      incidentApi.list({ page: 1, page_size: 1, status: 'open', severity: 'info' }),
+      // Incident: status=acknowledged × severity
+      incidentApi.list({ page: 1, page_size: 1, status: 'acknowledged', severity: 'critical' }),
+      incidentApi.list({ page: 1, page_size: 1, status: 'acknowledged', severity: 'warning' }),
+      incidentApi.list({ page: 1, page_size: 1, status: 'acknowledged', severity: 'info' }),
+      // Action
+      automationApi.list({ page: 1, page_size: 1, status: 'running' }),
+      automationApi.list({ page: 1, page_size: 1, status: 'failed' }),
+      // Workflow
+      workflowApi.list({ page: 1, page_size: 1, status: 'running' }),
+      workflowApi.list({ page: 1, page_size: 1, status: 'failed' }),
+      // Alert critical firing
+      alertsApi.list({ page: 1, page_size: 1, status: 'firing', severity: 'critical' }),
+    ]
+    const kpiResults = await Promise.allSettled(kpiRequests)
+    if (token === refreshTokenRef.current) {
+      const getTotal = (idx: number) => {
+        const r = kpiResults[idx]
+        return r.status === 'fulfilled' ? (r.value?.total || 0) : 0
+      }
+      setKpiTotals({
+        openCritical: getTotal(0),
+        openWarning: getTotal(1),
+        openInfo: getTotal(2),
+        ackCritical: getTotal(3),
+        ackWarning: getTotal(4),
+        ackInfo: getTotal(5),
+        runningActions: getTotal(6),
+        failedActions: getTotal(7),
+        runningWorkflows: getTotal(8),
+        failedWorkflows: getTotal(9),
+        criticalAlerts: getTotal(10),
+      })
+    }
+
     if (token === refreshTokenRef.current) setLastUpdated(dayjs())
   }, [])
 
@@ -218,6 +273,16 @@ export default function Dashboard() {
   }
 
   // === 派生指标 ===
+  // KPI 使用全量统计（kpiTotals），不受 page_size 限制
+  const activeIncidentsTotal = kpiTotals.openCritical + kpiTotals.openWarning + kpiTotals.openInfo +
+    kpiTotals.ackCritical + kpiTotals.ackWarning + kpiTotals.ackInfo
+  const criticalIncidentsTotal = kpiTotals.openCritical + kpiTotals.ackCritical
+  const warningIncidentsTotal = kpiTotals.openWarning + kpiTotals.ackWarning
+  const infoIncidentsTotal = kpiTotals.openInfo + kpiTotals.ackInfo
+  const openIncidentsTotal = kpiTotals.openCritical + kpiTotals.openWarning + kpiTotals.openInfo
+  const acknowledgedIncidentsTotal = kpiTotals.ackCritical + kpiTotals.ackWarning + kpiTotals.ackInfo
+
+  // items 仍用于 Priority List、Affected Services 等需要详情的场景
   const activeIncidents = incidents.filter((i) => i.status === 'open' || i.status === 'acknowledged')
   const criticalIncidents = activeIncidents.filter((i) => i.severity === 'critical')
   const warningIncidents = activeIncidents.filter((i) => i.severity === 'warning')
@@ -244,7 +309,9 @@ export default function Dashboard() {
     return dayjs(a.start_time).valueOf() - dayjs(b.start_time).valueOf()
   }).slice(0, 10)
 
-  // Action 统计
+  // Action 统计（KPI 使用全量 total，items 仍用于 Priority List 详情）
+  const runningActionsCount = kpiTotals.runningActions
+  const failedActionsCount = kpiTotals.failedActions
   const runningActions = actions.filter((a) => a.status === 'running')
   const failedActions = actions.filter((a) => a.status === 'failed' || a.status === 'timeout')
   const successActions = actions.filter((a) => a.status === 'success')
@@ -256,7 +323,9 @@ export default function Dashboard() {
     return v && v.verified === false
   })
 
-  // Workflow 统计
+  // Workflow 统计（KPI 使用全量 total）
+  const runningWorkflowsCount = kpiTotals.runningWorkflows
+  const failedWorkflowsCount = kpiTotals.failedWorkflows
   const runningWorkflows = workflows.filter((w) => w.status === 'running')
   const failedWorkflows = workflows.filter((w) => w.status === 'failed' || w.status === 'timeout')
   const successWorkflows = workflows.filter((w) => w.status === 'success')
@@ -403,16 +472,16 @@ export default function Dashboard() {
       {/* KPI Row 1 */}
       <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
         <Col xs={12} sm={12} md={6}>
-          <Card size="small" style={{ borderLeft: `3px solid ${criticalIncidents.length > 0 ? '#dc2626' : '#16a34a'}` }}>
+          <Card size="small" style={{ borderLeft: `3px solid ${criticalIncidentsTotal > 0 ? '#dc2626' : '#16a34a'}` }}>
             <Statistic
               title={<span><AlertOutlined style={{ marginRight: 4 }} />活跃事件</span>}
-              value={activeIncidents.length}
-              valueStyle={{ fontSize: 28, color: criticalIncidents.length > 0 ? '#dc2626' : '#111827' }}
+              value={activeIncidentsTotal}
+              valueStyle={{ fontSize: 28, color: criticalIncidentsTotal > 0 ? '#dc2626' : '#111827' }}
             />
             <div style={{ marginTop: 4, fontSize: 11 }}>
-              <Tag color="red" style={{ margin: 0, fontSize: 10 }}>严重 {criticalIncidents.length}</Tag>
-              <Tag color="orange" style={{ margin: '0 4px', fontSize: 10 }}>警告 {warningIncidents.length}</Tag>
-              <Tag color="blue" style={{ margin: 0, fontSize: 10 }}>信息 {infoIncidents.length}</Tag>
+              <Tag color="red" style={{ margin: 0, fontSize: 10 }}>严重 {criticalIncidentsTotal}</Tag>
+              <Tag color="orange" style={{ margin: '0 4px', fontSize: 10 }}>警告 {warningIncidentsTotal}</Tag>
+              <Tag color="blue" style={{ margin: 0, fontSize: 10 }}>信息 {infoIncidentsTotal}</Tag>
             </div>
           </Card>
         </Col>
@@ -420,12 +489,12 @@ export default function Dashboard() {
           <Card size="small" style={{ borderLeft: '3px solid #d97706' }}>
             <Statistic
               title={<span><ClockCircleOutlined style={{ marginRight: 4 }} />待处理 / 已确认</span>}
-              value={openIncidents.length}
-              suffix={`/ ${acknowledgedIncidents.length}`}
+              value={openIncidentsTotal}
+              suffix={`/ ${acknowledgedIncidentsTotal}`}
               valueStyle={{ fontSize: 28, color: '#d97706' }}
             />
             <div style={{ marginTop: 4, fontSize: 11, color: '#6b7280' }}>
-              待处理 {openIncidents.length} · 已确认 {acknowledgedIncidents.length}
+              待处理 {openIncidentsTotal} · 已确认 {acknowledgedIncidentsTotal}
             </div>
           </Card>
         </Col>
@@ -445,11 +514,11 @@ export default function Dashboard() {
           <Card size="small" style={{ borderLeft: `3px solid ${verificationFailed.length > 0 ? '#dc2626' : '#16a34a'}` }}>
             <Statistic
               title={<span><RocketOutlined style={{ marginRight: 4 }} />自动化运行中</span>}
-              value={runningActions.length + runningWorkflows.length}
+              value={runningActionsCount + runningWorkflowsCount}
               valueStyle={{ fontSize: 28, color: '#2563eb' }}
             />
             <div style={{ marginTop: 4, fontSize: 11 }}>
-              <Tag color="error" style={{ margin: 0, fontSize: 10 }}>失败 {failedActions.length + failedWorkflows.length}</Tag>
+              <Tag color="error" style={{ margin: 0, fontSize: 10 }}>失败 {failedActionsCount + failedWorkflowsCount}</Tag>
               {verificationFailed.length > 0 && (
                 <Tag color="error" style={{ marginLeft: 4, fontSize: 10 }}>验证失败 {verificationFailed.length}</Tag>
               )}
@@ -517,8 +586,8 @@ export default function Dashboard() {
           >
             {actionsLoading ? <Spin /> : (
               <Row gutter={[8, 8]}>
-                <Col span={6}><Statistic title="运行中" value={runningActions.length} valueStyle={{ fontSize: 20, color: '#2563eb' }} /></Col>
-                <Col span={6}><Statistic title="失败" value={failedActions.length} valueStyle={{ fontSize: 20, color: '#dc2626' }} /></Col>
+                <Col span={6}><Statistic title="运行中" value={runningActionsCount} valueStyle={{ fontSize: 20, color: '#2563eb' }} /></Col>
+                <Col span={6}><Statistic title="失败" value={failedActionsCount} valueStyle={{ fontSize: 20, color: '#dc2626' }} /></Col>
                 <Col span={6}><Statistic title="成功" value={successActions.length} valueStyle={{ fontSize: 20, color: '#16a34a' }} /></Col>
                 <Col span={6}><Statistic title="待审批" value={pendingActions.length} valueStyle={{ fontSize: 20, color: '#d97706' }} /></Col>
               </Row>
@@ -541,8 +610,8 @@ export default function Dashboard() {
           >
             {workflowsLoading ? <Spin /> : (
               <Row gutter={[8, 8]}>
-                <Col span={6}><Statistic title="运行中" value={runningWorkflows.length} valueStyle={{ fontSize: 20, color: '#2563eb' }} /></Col>
-                <Col span={6}><Statistic title="失败" value={failedWorkflows.length} valueStyle={{ fontSize: 20, color: '#dc2626' }} /></Col>
+                <Col span={6}><Statistic title="运行中" value={runningWorkflowsCount} valueStyle={{ fontSize: 20, color: '#2563eb' }} /></Col>
+                <Col span={6}><Statistic title="失败" value={failedWorkflowsCount} valueStyle={{ fontSize: 20, color: '#dc2626' }} /></Col>
                 <Col span={6}><Statistic title="成功" value={successWorkflows.length} valueStyle={{ fontSize: 20, color: '#16a34a' }} /></Col>
                 <Col span={6}><Statistic title="待审批" value={pendingWorkflows.length} valueStyle={{ fontSize: 20, color: '#d97706' }} /></Col>
               </Row>

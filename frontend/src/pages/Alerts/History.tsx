@@ -1,13 +1,15 @@
 import { useEffect, useState, useCallback } from 'react'
 import {
   Table, Tag, Card, Button, Spin, Space, Select, Input, Drawer, Descriptions,
-  message, Empty, Tooltip,
+  message, Empty, Tooltip, Alert as AlertBanner,
 } from 'antd'
 import {
-  ReloadOutlined, SearchOutlined,
+  ReloadOutlined, SearchOutlined, FireOutlined, ThunderboltOutlined, ExclamationCircleOutlined,
 } from '@ant-design/icons'
+import { useNavigate } from 'react-router-dom'
 import { alertsApi } from '@/api/alerts'
 import type { Alert, PageResult } from '@/types'
+import IncidentDetail from '@/pages/AIOps/IncidentDetail'
 import dayjs from 'dayjs'
 
 const severityColor: Record<string, string> = {
@@ -35,6 +37,7 @@ const severityLabel: Record<string, string> = {
 }
 
 export default function AlertHistory() {
+  const navigate = useNavigate()
   const [data, setData] = useState<PageResult<Alert> | null>(null)
   const [loading, setLoading] = useState(false)
   const [page, setPage] = useState(1)
@@ -45,6 +48,9 @@ export default function AlertHistory() {
   const [detail, setDetail] = useState<Alert | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
+  // IncidentDetail Drawer
+  const [incidentDetailId, setIncidentDetailId] = useState<number | null>(null)
+  const [incidentDetailOpen, setIncidentDetailOpen] = useState(false)
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -173,10 +179,51 @@ export default function AlertHistory() {
         return `${hours} 小时 ${mins} 分`
       },
     },
+    {
+      title: '关联 Incident',
+      key: 'incident',
+      width: 140,
+      render: (_: any, r: Alert) => {
+        if (!r.incident_ids || r.incident_ids.length === 0) {
+          return <Tag color="default" style={{ margin: 0 }}>未关联</Tag>
+        }
+        return (
+          <Space size={4} wrap>
+            {r.incident_ids.map((id) => (
+              <Tag
+                key={id}
+                color="blue"
+                style={{ margin: 0, cursor: 'pointer' }}
+                onClick={() => {
+                  setIncidentDetailId(id)
+                  setIncidentDetailOpen(true)
+                }}
+              >
+                #{id}
+              </Tag>
+            ))}
+          </Space>
+        )
+      },
+    },
   ]
 
   return (
     <div style={{ padding: 16 }}>
+      <AlertBanner
+        type="info"
+        showIcon
+        message="Alert Intelligence"
+        description={
+          <Space wrap>
+            <Button size="small" icon={<ExclamationCircleOutlined />} onClick={() => navigate('/alerts/realtime')}>实时告警</Button>
+            <Button type="primary" size="small">告警历史</Button>
+            <Button size="small" icon={<FireOutlined />} onClick={() => navigate('/alerts/aggregate')}>告警聚合</Button>
+            <Button size="small" icon={<ThunderboltOutlined />} onClick={() => navigate('/alerts/noise')}>告警降噪</Button>
+          </Space>
+        }
+        style={{ marginBottom: 12 }}
+      />
       <Card
         title="告警历史"
         extra={
@@ -293,6 +340,16 @@ export default function AlertHistory() {
           </Descriptions>
         )}
       </Drawer>
+
+      {/* IncidentDetail Drawer */}
+      {incidentDetailId !== null && (
+        <IncidentDetail
+          id={incidentDetailId}
+          open={incidentDetailOpen}
+          onClose={() => setIncidentDetailOpen(false)}
+          onChanged={fetchData}
+        />
+      )}
     </div>
   )
 }

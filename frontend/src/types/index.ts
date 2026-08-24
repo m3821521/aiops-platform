@@ -165,6 +165,8 @@ export interface Alert {
   ends_at?: string
   created_at: string
   updated_at: string
+  // 关联的 Incident ID 列表（通过 incident_signals 表关联，一个 Alert 可能关联多个 Incident）
+  incident_ids?: number[]
 }
 
 // 告警聚合
@@ -178,6 +180,17 @@ export interface AlertGroup {
   alertnames: string[]
   starts_at: string
   ends_at?: string
+  // 组内告警详情（后端返回，用于关联 Incident 查询）
+  alerts?: Alert[]
+}
+
+// 告警降噪结果
+export interface NoiseResult {
+  groups: AlertGroup[]
+  total_before: number
+  total_after: number
+  is_storm: boolean
+  storm_reason?: string
 }
 
 // 异常检测

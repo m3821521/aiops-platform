@@ -251,7 +251,7 @@ export default function AIAssistant() {
         message.info(route.message)
         // 如果有 incident_id，跳转到 Incident Detail
         if (rec.incident_id) {
-          navigate(`/incidents/${rec.incident_id}`)
+          navigate('/aiops/incidents')
         }
         return
       }

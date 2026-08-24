@@ -1768,7 +1768,7 @@ export default function IncidentDetail({ id, open, onClose, onChanged }: Props) 
           icon={<span>🤖</span>}
           onClick={() => {
             onClose()
-            navigate(`/ai/assistant?incident_id=${id}`)
+            navigate(`/ai?incident_id=${id}`)
           }}
         >
           Ask AI

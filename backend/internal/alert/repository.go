@@ -63,6 +63,11 @@ func (r *Repository) FindByID(ctx context.Context, id int64) (*Alert, error) {
 	if err := r.db.WithContext(ctx).First(&a, id).Error; err != nil {
 		return nil, err
 	}
+	// 补充关联的 Incident IDs。
+	if err := r.fillIncidentIDs(ctx, []*Alert{&a}); err != nil {
+		// 关联查询失败不影响主数据返回，仅记录空。
+		a.IncidentIDs = nil
+	}
 	return &a, nil
 }
 
@@ -112,7 +117,64 @@ func (r *Repository) List(ctx context.Context, filter ListFilter, page, pageSize
 	if err := q.Session(&gorm.Session{}).Order("starts_at DESC").Offset(offset).Limit(pageSize).Find(&alerts).Error; err != nil {
 		return nil, 0, err
 	}
+	// 批量补充关联的 Incident IDs（避免 N+1）。
+	if len(alerts) > 0 {
+		ptrs := make([]*Alert, len(alerts))
+		for i := range alerts {
+			ptrs[i] = &alerts[i]
+		}
+		if err := r.fillIncidentIDs(ctx, ptrs); err != nil {
+			// 关联查询失败不影响主数据返回。
+		}
+	}
 	return alerts, total, nil
+}
+
+// fillIncidentIDs 批量查询 Alert 关联的 Incident IDs。
+// 通过 incident_signals 表关联：Alert.Fingerprint = IncidentSignal.SignalID (signal_type='alert')。
+// 使用 IN (...) 批量查询，避免 N+1。一个 Alert 可能关联多个 Incident。
+func (r *Repository) fillIncidentIDs(ctx context.Context, alerts []*Alert) error {
+	if len(alerts) == 0 {
+		return nil
+	}
+	fingerprints := make([]string, 0, len(alerts))
+	fpSet := make(map[string]bool, len(alerts))
+	for _, a := range alerts {
+		if a.Fingerprint != "" && !fpSet[a.Fingerprint] {
+			fingerprints = append(fingerprints, a.Fingerprint)
+			fpSet[a.Fingerprint] = true
+		}
+	}
+	if len(fingerprints) == 0 {
+		return nil
+	}
+
+	// 批量查询 incident_signals：signal_type='alert' AND signal_id IN (...)
+	type signalRow struct {
+		SignalID   string
+		IncidentID int64
+	}
+	var rows []signalRow
+	if err := r.db.WithContext(ctx).Table("incident_signals").
+		Select("signal_id, incident_id").
+		Where("signal_type = ? AND signal_id IN ?", "alert", fingerprints).
+		Find(&rows).Error; err != nil {
+		return err
+	}
+
+	// 按 signal_id 分组。
+	fpToIncidents := make(map[string][]int64, len(fingerprints))
+	for _, row := range rows {
+		fpToIncidents[row.SignalID] = append(fpToIncidents[row.SignalID], row.IncidentID)
+	}
+
+	// 映射到 Alert。
+	for _, a := range alerts {
+		if ids, ok := fpToIncidents[a.Fingerprint]; ok && len(ids) > 0 {
+			a.IncidentIDs = ids
+		}
+	}
+	return nil
 }
 
 // UpdateStatus 更新告警状态。

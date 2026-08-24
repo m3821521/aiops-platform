@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
 import {
   Table, Card, Tag, Button, Space, Input, Select, Modal, message, Drawer,
   Descriptions, Timeline, Alert, Typography, Badge, Spin, Form,
@@ -12,6 +11,7 @@ import { automationApi, type AutomationAction, type DryRunResult } from '@/api/a
 import { connectionApi, type ConnectionView } from '@/api/connection'
 import { jenkinsApi } from '@/api/jenkins'
 import { argocdApi } from '@/api/argocd'
+import IncidentDetail from '@/pages/AIOps/IncidentDetail'
 
 const { Text } = Typography
 
@@ -65,7 +65,6 @@ const generateActionCommand = (action: AutomationAction): string => {
 }
 
 export default function AutomationActions() {
-  const navigate = useNavigate()
   const [actions, setActions] = useState<AutomationAction[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -76,6 +75,9 @@ export default function AutomationActions() {
   const [typeFilter, setTypeFilter] = useState<string>()
   const [detail, setDetail] = useState<AutomationAction | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
+  // IncidentDetail Drawer
+  const [incidentDetailId, setIncidentDetailId] = useState<number | null>(null)
+  const [incidentDetailOpen, setIncidentDetailOpen] = useState(false)
   const [dryRunResult, setDryRunResult] = useState<DryRunResult | null>(null)
   const [dryRunLoading, setDryRunLoading] = useState(false)
   const [executing, setExecuting] = useState(false)
@@ -375,8 +377,22 @@ export default function AutomationActions() {
     {
       title: '关联事件',
       dataIndex: 'incident_id',
-      width: 90,
-      render: (id: number) => id ? <a onClick={() => navigate(`/aiops/incidents/${id}`)}>#{id}</a> : '-',
+      width: 100,
+      render: (id: number) => {
+        if (!id) return '-'
+        return (
+          <Tag
+            color="blue"
+            style={{ margin: 0, cursor: 'pointer' }}
+            onClick={() => {
+              setIncidentDetailId(id)
+              setIncidentDetailOpen(true)
+            }}
+          >
+            #{id}
+          </Tag>
+        )
+      },
     },
     {
       title: '原因',
@@ -786,6 +802,16 @@ export default function AutomationActions() {
           </Form.Item>
         </Form>
       </Modal>
+
+      {/* IncidentDetail Drawer */}
+      {incidentDetailId !== null && (
+        <IncidentDetail
+          id={incidentDetailId}
+          open={incidentDetailOpen}
+          onClose={() => setIncidentDetailOpen(false)}
+          onChanged={load}
+        />
+      )}
     </div>
   )
 }

@@ -38,7 +38,6 @@ import {
   ExclamationCircleOutlined,
   LinkOutlined,
 } from '@ant-design/icons'
-import { useNavigate } from 'react-router-dom'
 import { rcaApi } from '@/api/rca'
 import { incidentApi } from '@/api/incident'
 import type { EvidenceBundle } from '@/api/incident'
@@ -53,6 +52,7 @@ import type {
   RCAStatus,
   AIAnalysisResult,
 } from '@/types'
+import IncidentDetail from './IncidentDetail'
 
 const { Title, Text, Paragraph } = Typography
 const { Panel } = Collapse
@@ -150,7 +150,6 @@ const formatDuration = (start: string, end?: string | null) => {
 // ============== Main Component ==============
 
 export default function RCAAnalysis() {
-  const navigate = useNavigate()
   const [incidents, setIncidents] = useState<Incident[]>([])
   const [selectedIncidentId, setSelectedIncidentId] = useState<number | null>(null)
   const [incident, setIncident] = useState<Incident | null>(null)
@@ -160,6 +159,8 @@ export default function RCAAnalysis() {
   const [timeline, setTimeline] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [rcaRunning, setRcaRunning] = useState(false)
+  // IncidentDetail Drawer
+  const [incidentDetailOpen, setIncidentDetailOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   // 加载 Incident 列表
@@ -348,7 +349,7 @@ export default function RCAAnalysis() {
               </Button>
               <Button
                 icon={<EyeOutlined />}
-                onClick={() => incident && navigate(`/aiops/incidents/${incident.id}`)}
+                onClick={() => incident && setIncidentDetailOpen(true)}
                 disabled={!incident}
               >
                 查看事件
@@ -1023,6 +1024,21 @@ export default function RCAAnalysis() {
             </Space>
           </Card>
         </>
+      )}
+
+      {/* IncidentDetail Drawer */}
+      {selectedIncidentId !== null && (
+        <IncidentDetail
+          id={selectedIncidentId}
+          open={incidentDetailOpen}
+          onClose={() => setIncidentDetailOpen(false)}
+          onChanged={() => {
+            // Incident 状态变化后刷新当前 RCA 页面数据
+            if (selectedIncidentId) {
+              incidentApi.get(selectedIncidentId).then(setIncident).catch(() => {})
+            }
+          }}
+        />
       )}
     </div>
   )

@@ -47,6 +47,8 @@ const menuItems = [
     children: [
       { key: '/alerts/realtime', label: '实时告警' },
       { key: '/alerts/history', label: '告警历史' },
+      { key: '/alerts/aggregate', label: '告警聚合' },
+      { key: '/alerts/noise', label: '告警降噪' },
     ],
   },
   {

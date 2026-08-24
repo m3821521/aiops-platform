@@ -16,6 +16,7 @@ import { ReloadOutlined } from '@ant-design/icons'
 import { anomalyApi } from '../../api/anomaly'
 import type { AnomalyRecord, AnomalyListFilter } from '../../types'
 import AnomalyDetail from './AnomalyDetail'
+import IncidentDetail from './IncidentDetail'
 
 const severityColor: Record<string, string> = {
   critical: 'red',
@@ -38,6 +39,9 @@ export default function Anomaly() {
   const [filter, setFilter] = useState<AnomalyListFilter>({})
   const [keyword, setKeyword] = useState('')
   const [detail, setDetail] = useState<AnomalyRecord | null>(null)
+  // IncidentDetail Drawer
+  const [incidentDetailId, setIncidentDetailId] = useState<number | null>(null)
+  const [incidentDetailOpen, setIncidentDetailOpen] = useState(false)
 
   const fetchData = async () => {
     setLoading(true)
@@ -130,6 +134,26 @@ export default function Anomaly() {
       dataIndex: 'status',
       width: 90,
       render: (v: string) => <Tag color={statusColor[v]}>{v}</Tag>,
+    },
+    {
+      title: '关联 Incident',
+      dataIndex: 'incident_id',
+      width: 110,
+      render: (id?: number) => {
+        if (!id) return '-'
+        return (
+          <Tag
+            color="blue"
+            style={{ margin: 0, cursor: 'pointer' }}
+            onClick={() => {
+              setIncidentDetailId(id)
+              setIncidentDetailOpen(true)
+            }}
+          >
+            #{id}
+          </Tag>
+        )
+      },
     },
     {
       title: '操作',
@@ -260,6 +284,16 @@ export default function Anomaly() {
       </Card>
 
       <AnomalyDetail record={detail} onClose={() => setDetail(null)} onRefresh={fetchData} />
+
+      {/* IncidentDetail Drawer */}
+      {incidentDetailId !== null && (
+        <IncidentDetail
+          id={incidentDetailId}
+          open={incidentDetailOpen}
+          onClose={() => setIncidentDetailOpen(false)}
+          onChanged={fetchData}
+        />
+      )}
     </div>
   )
 }

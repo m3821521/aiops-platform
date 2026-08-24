@@ -8,6 +8,7 @@ import {
 } from '@ant-design/icons'
 import { workflowApi, type Workflow, type WorkflowExecution } from '@/api/workflow'
 import WorkflowExecutionDetail from './WorkflowExecutionDetail'
+import IncidentDetail from '@/pages/AIOps/IncidentDetail'
 
 const statusColor: Record<string, string> = {
   draft: 'default',
@@ -42,6 +43,9 @@ export default function Workflows() {
   const [pageSize, setPageSize] = useState(20)
   const [detail, setDetail] = useState<Workflow | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
+  // IncidentDetail Drawer
+  const [incidentDetailId, setIncidentDetailId] = useState<number | null>(null)
+  const [incidentDetailOpen, setIncidentDetailOpen] = useState(false)
   const [execHistoryOpen, setExecHistoryOpen] = useState(false)
   const [execHistory, setExecHistory] = useState<WorkflowExecution[]>([])
   const [execHistoryTotal, setExecHistoryTotal] = useState(0)
@@ -157,7 +161,24 @@ export default function Workflows() {
     { title: '步骤数', dataIndex: 'steps', width: 80, render: (steps: any[]) => steps?.length || 0 },
     { title: '风险', dataIndex: 'risk', width: 80, render: (r: string) => <Tag color={riskColor[r]}>{r}</Tag> },
     { title: '状态', dataIndex: 'status', width: 130, render: (s: string) => <Badge color={statusColor[s]} text={s} /> },
-    { title: '关联事件', dataIndex: 'incident_id', width: 90, render: (id: number) => id ? `#${id}` : '-' },
+    {
+      title: '关联事件', dataIndex: 'incident_id', width: 100,
+      render: (id: number) => {
+        if (!id) return '-'
+        return (
+          <Tag
+            color="blue"
+            style={{ margin: 0, cursor: 'pointer' }}
+            onClick={() => {
+              setIncidentDetailId(id)
+              setIncidentDetailOpen(true)
+            }}
+          >
+            #{id}
+          </Tag>
+        )
+      },
+    },
     { title: '创建时间', dataIndex: 'created_at', width: 170, render: (t: string) => new Date(t).toLocaleString() },
     {
       title: '操作', width: 220,
@@ -202,7 +223,20 @@ export default function Workflows() {
               <Descriptions.Item label="状态"><Badge color={statusColor[detail.status]} text={detail.status} /></Descriptions.Item>
               <Descriptions.Item label="风险"><Tag color={riskColor[detail.risk]}>{detail.risk}</Tag></Descriptions.Item>
               <Descriptions.Item label="步骤数">{detail.steps?.length || 0}</Descriptions.Item>
-              <Descriptions.Item label="关联事件">{detail.incident_id ? `#${detail.incident_id}` : '-'}</Descriptions.Item>
+              <Descriptions.Item label="关联事件">
+                {detail.incident_id ? (
+                  <Tag
+                    color="blue"
+                    style={{ margin: 0, cursor: 'pointer' }}
+                    onClick={() => {
+                      setIncidentDetailId(detail.incident_id!)
+                      setIncidentDetailOpen(true)
+                    }}
+                  >
+                    #{detail.incident_id}
+                  </Tag>
+                ) : '-'}
+              </Descriptions.Item>
               <Descriptions.Item label="创建时间" span={2}>{new Date(detail.created_at).toLocaleString()}</Descriptions.Item>
               {detail.approved_at && <Descriptions.Item label="审批时间" span={2}>{new Date(detail.approved_at).toLocaleString()}</Descriptions.Item>}
               {detail.started_at && <Descriptions.Item label="执行时间" span={2}>{new Date(detail.started_at).toLocaleString()}</Descriptions.Item>}
@@ -298,6 +332,16 @@ export default function Workflows() {
         workflowName={detail?.name}
         onClose={() => setExecDetailId(null)}
       />
+
+      {/* IncidentDetail Drawer */}
+      {incidentDetailId !== null && (
+        <IncidentDetail
+          id={incidentDetailId}
+          open={incidentDetailOpen}
+          onClose={() => setIncidentDetailOpen(false)}
+          onChanged={load}
+        />
+      )}
     </div>
   )
 }
