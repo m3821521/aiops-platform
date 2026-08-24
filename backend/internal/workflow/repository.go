@@ -80,10 +80,16 @@ func (r *Repository) FindStaleRunning(ctx context.Context, threshold time.Durati
 // 同步执行模型下，服务重启意味着之前的 execution goroutine 已消失，无安全 Resume 能力。
 // 因此启动时所有遗留 RUNNING 都视为 interrupted execution。
 // 返回被更新的记录数。
+// MarkStaleRunningAsFailed 服务启动时将遗留 RUNNING 状态的 Workflow 标记为 FAILED。
+// P0-05.2: 只恢复 lease 已过期，或无 lease 且 updated_at 超过 threshold 的 Workflow。
+// 正常 heartbeat 的 Workflow（lease 未过期）禁止被 recovery 误杀。
+// 返回被更新的记录数。
 func (r *Repository) MarkStaleRunningAsFailed(ctx context.Context, threshold time.Duration) (int64, error) {
 	now := time.Now()
+	cutoff := now.Add(-threshold)
 	result := r.db.WithContext(ctx).Model(&Workflow{}).
-		Where("status = ?", WorkflowStatusRunning).
+		Where("status = ? AND (lease_expires_at IS NOT NULL AND lease_expires_at < ?) OR (lease_expires_at IS NULL AND updated_at < ?)",
+			WorkflowStatusRunning, now, cutoff).
 		Updates(map[string]interface{}{
 			"status":           WorkflowStatusFailed,
 			"finished_at":      now,

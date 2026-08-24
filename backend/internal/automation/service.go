@@ -221,7 +221,7 @@ func (s *Service) Execute(ctx context.Context, actionID, userID int64) (*Executi
 		return nil, fmt.Errorf("四眼原则：申请人不能执行自己创建的操作")
 	}
 
-	// 并发检查。
+	// 并发检查（快速失败预检查，最终原子保证由 ClaimForExecution 的 NOT EXISTS 子查询提供）。
 	if err := s.policy.CheckConcurrency(ctx, s.actions, *action); err != nil {
 		return nil, err
 	}
@@ -236,7 +236,34 @@ func (s *Service) Execute(ctx context.Context, actionID, userID int64) (*Executi
 		return nil, fmt.Errorf("Dry Run 验证失败: %w", err)
 	}
 
-	// 创建 Execution 记录。
+	// P0-05 + P0-05.2: 原子 Claim，防止 TOCTOU 竞态导致重复执行。
+	// 使用 CAS (WHERE status='approved') + NOT EXISTS 子查询（同一 target 无其他 running）。
+	// P0-05.2: 先 Claim 再创建 Execution，避免 100 并发产生 100 个 orphan execution 记录。
+	claimed, err := s.actions.ClaimForExecution(ctx, actionID, leaseTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("claim action for execution failed: %w", err)
+	}
+	if !claimed {
+		// 区分失败原因：已被其他请求 claim vs 同一 target 有其他 running action
+		current, _ := s.actions.FindByID(ctx, actionID)
+		if current != nil && current.Status != StatusApproved {
+			return nil, fmt.Errorf("Action 已被其他请求声明执行或状态已变更（当前状态: %s），无法重复执行", current.Status)
+		}
+		// 状态仍为 approved，说明是 target 并发冲突
+		hasRunning, _ := s.actions.HasRunningByTarget(ctx, action.TargetType, action.TargetName, action.Cluster, action.ID)
+		if hasRunning {
+			return nil, fmt.Errorf("RESOURCE_BUSY: 目标资源 %s/%s 已有其他操作正在执行", action.TargetType, action.TargetName)
+		}
+		return nil, fmt.Errorf("Action 声明执行失败（可能是并发冲突），请重试")
+	}
+
+	// Claim 成功后重新读取 action，获取更新后的状态和 lease。
+	action, err = s.actions.FindByID(ctx, actionID)
+	if err != nil {
+		return nil, fmt.Errorf("reload action after claim failed: %w", err)
+	}
+
+	// P0-05.2: Claim 成功后才创建 Execution 记录，避免 orphan execution。
 	exec := &ActionExecution{
 		ActionID:  action.ID,
 		Executor:  executor.Type(),
@@ -245,23 +272,9 @@ func (s *Service) Execute(ctx context.Context, actionID, userID int64) (*Executi
 		CreatedAt: time.Now(),
 	}
 	if err := s.executions.Create(ctx, exec); err != nil {
-		return nil, err
-	}
-
-	// P0-05: 原子 Claim，防止 TOCTOU 竞态导致重复执行。
-	// 使用 CAS (WHERE status='approved') 确保只有一个请求能成功声明执行权。
-	claimed, err := s.actions.ClaimForExecution(ctx, actionID, leaseTimeout)
-	if err != nil {
-		return nil, fmt.Errorf("claim action for execution failed: %w", err)
-	}
-	if !claimed {
-		return nil, fmt.Errorf("Action 已被其他请求声明执行或状态已变更，无法重复执行")
-	}
-
-	// Claim 成功后重新读取 action，获取更新后的状态和 lease。
-	action, err = s.actions.FindByID(ctx, actionID)
-	if err != nil {
-		return nil, fmt.Errorf("reload action after claim failed: %w", err)
+		// Execution 创建失败，回滚 action 状态为 approved
+		_ = s.actions.Update(ctx, action) // 简单回滚
+		return nil, fmt.Errorf("创建 execution 记录失败: %w", err)
 	}
 
 	// 启动 heartbeat goroutine，定期刷新 lease。

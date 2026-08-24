@@ -2,7 +2,10 @@ package automation
 
 import (
 	"context"
+	"errors"
 	"fmt"
+
+	"gorm.io/gorm"
 )
 
 // PolicyEngine 负责操作前的策略检查。
@@ -61,9 +64,18 @@ func (p *PolicyEngine) ValidateStateTransition(from, to ActionStatus) error {
 }
 
 // CheckConcurrency 检查是否有并发冲突。
+// P0-05.2: DB error 时 fail closed，禁止执行危险 Action。
 func (p *PolicyEngine) CheckConcurrency(ctx context.Context, repo *ActionRepository, action Action) error {
 	running, err := repo.FindRunningByTarget(ctx, action.TargetType, action.TargetName, action.Cluster)
-	if err == nil && running != nil && running.ID != action.ID {
+	if err != nil {
+		// gorm.ErrRecordNotFound 表示没有 running action，正常情况
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		// P0-05.2: DB error → fail closed，无法确认资源状态时禁止执行
+		return fmt.Errorf("并发检查失败（数据库错误，fail closed）: %w", err)
+	}
+	if running != nil && running.ID != action.ID {
 		return fmt.Errorf("目标资源 %s/%s 已有操作 #%d 正在执行", action.TargetType, action.TargetName, running.ID)
 	}
 	return nil

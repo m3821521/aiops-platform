@@ -1079,8 +1079,9 @@ func TestRecoverStaleExecutions(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	// P2-02: Startup Recovery 不再使用 updated_at threshold。
-	// 同步执行模型下，服务重启意味着所有 running 都已中断，统一恢复。
+	// P0-05.2: Startup Recovery 只恢复 lease 已过期，或无 lease 且 updated_at < threshold 的 Workflow。
+	// 正常 heartbeat 的 Workflow（lease 未过期）禁止被 recovery 误杀。
+	// 创建一个 stale RUNNING Workflow（无 lease，UpdatedAt 在 10 分钟前，超过 5 分钟 threshold）
 	staleWF := &Workflow{
 		Name:      "stale-workflow",
 		Status:    WorkflowStatusRunning,
@@ -1093,7 +1094,8 @@ func TestRecoverStaleExecutions(t *testing.T) {
 		t.Fatalf("create stale workflow failed: %v", err)
 	}
 
-	// P2-02: 启动时也会被恢复（同步执行模型下重启意味着中断）
+	// P0-05.2: 创建一个新鲜的 RUNNING Workflow（无 lease，UpdatedAt 在 1 分钟前，未超过 threshold）
+	// 不应该被恢复（可能是正常运行的任务）
 	freshWF := &Workflow{
 		Name:      "fresh-workflow",
 		Status:    WorkflowStatusRunning,
@@ -1106,14 +1108,29 @@ func TestRecoverStaleExecutions(t *testing.T) {
 		t.Fatalf("create fresh workflow failed: %v", err)
 	}
 
-	// 执行启动恢复（threshold 参数保留用于兼容，但不再使用）
+	// P0-05.2: 创建一个有 lease 且未过期的 RUNNING Workflow（模拟正常 heartbeat）
+	activeLease := now.Add(60 * time.Second)
+	activeWF := &Workflow{
+		Name:           "active-workflow",
+		Status:         WorkflowStatusRunning,
+		Risk:           "medium",
+		CreatedBy:      1,
+		CreatedAt:      now.Add(-1 * time.Minute),
+		UpdatedAt:      now.Add(-1 * time.Minute),
+		LeaseExpiresAt: &activeLease,
+	}
+	if err := repo.Create(ctx, activeWF); err != nil {
+		t.Fatalf("create active workflow failed: %v", err)
+	}
+
+	// 执行启动恢复（threshold = 5 分钟）
 	recovered, err := svc.RecoverStaleExecutions(ctx, 5*time.Minute)
 	if err != nil {
 		t.Fatalf("recover stale executions failed: %v", err)
 	}
-	// P2-02: 启动时所有 running 都被恢复
-	if recovered != 2 {
-		t.Errorf("expected 2 recovered workflows on startup, got %d", recovered)
+	// P0-05.2: 只有 stale workflow（无 lease 且 updated_at < cutoff）被恢复
+	if recovered != 1 {
+		t.Errorf("expected 1 recovered workflow (stale only), got %d", recovered)
 	}
 
 	// 验证 stale Workflow 已被标记为 FAILED
@@ -1128,13 +1145,22 @@ func TestRecoverStaleExecutions(t *testing.T) {
 		t.Error("expected stale workflow to have finished_at set")
 	}
 
-	// P2-02: 验证 fresh Workflow 也被标记为 FAILED（启动时全量恢复）
+	// P0-05.2: 验证 fresh Workflow 仍然是 RUNNING（未被误恢复）
 	recoveredFresh, err := repo.FindByID(ctx, freshWF.ID)
 	if err != nil {
 		t.Fatalf("find fresh workflow failed: %v", err)
 	}
-	if recoveredFresh.Status != WorkflowStatusFailed {
-		t.Errorf("expected fresh workflow status %s on startup recovery, got %s", WorkflowStatusFailed, recoveredFresh.Status)
+	if recoveredFresh.Status != WorkflowStatusRunning {
+		t.Errorf("expected fresh workflow status %s (not recovered), got %s", WorkflowStatusRunning, recoveredFresh.Status)
+	}
+
+	// P0-05.2: 验证有 active lease 的 Workflow 仍然是 RUNNING（未被误恢复）
+	recoveredActive, err := repo.FindByID(ctx, activeWF.ID)
+	if err != nil {
+		t.Fatalf("find active workflow failed: %v", err)
+	}
+	if recoveredActive.Status != WorkflowStatusRunning {
+		t.Errorf("expected active lease workflow status %s (not recovered), got %s", WorkflowStatusRunning, recoveredActive.Status)
 	}
 }
 
@@ -1356,16 +1382,25 @@ func TestWF_StartupRecoveryExistingRunning(t *testing.T) {
 	repo := NewRepository(db)
 	ctx := context.Background()
 
+	// P0-05.2: Startup Recovery 只恢复 lease 已过期，或无 lease 且 updated_at < cutoff 的 Workflow。
+	// 创建一个 lease 已过期的 running workflow（应该被恢复）
+	expiredLease := time.Now().Add(-60 * time.Second)
+	createRunningWorkflow(t, repo, &expiredLease)
+
+	// 创建一个 lease 未过期的 running workflow（不应该被恢复）
+	futureLease := time.Now().Add(60 * time.Second)
+	createRunningWorkflow(t, repo, &futureLease)
+
+	// 创建一个无 lease 且 updated_at 很新的 running workflow（不应该被恢复）
 	createRunningWorkflow(t, repo, nil)
-	future := time.Now().Add(60 * time.Second)
-	createRunningWorkflow(t, repo, &future)
 
 	count, err := repo.MarkStaleRunningAsFailed(ctx, 5*time.Minute)
 	if err != nil {
 		t.Fatalf("startup recovery failed: %v", err)
 	}
-	if count != 2 {
-		t.Errorf("expected 2 recovered on startup, got %d", count)
+	// P0-05.2: 只有 lease 已过期的 workflow 被恢复（1 个）
+	if count != 1 {
+		t.Errorf("expected 1 recovered (expired lease only), got %d", count)
 	}
 }
 

@@ -94,9 +94,17 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 
 	v1 := r.Group("/api/v1")
 	{
-		// P0-01: 统一认证中间件。所有 /api/v1 端点（除上述公开端点）都必须认证。
+		// P0-01 + P0-05.2: 统一认证中间件。所有 /api/v1 端点（除上述公开端点）都必须认证。
+		// P0-05.2: 非 test 模式下 AuthService == nil 时 fail closed，返回 401，禁止 API 正常开放。
+		// test 模式下 AuthService == nil 时跳过认证（测试环境通常不需要真实认证）。
 		if deps.AuthService != nil {
 			v1.Use(auth.AuthMiddleware(deps.AuthService))
+		} else if mode != "test" {
+			v1.Use(func(c *gin.Context) {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+					"error": "认证服务未配置（AuthService missing），API 已 fail closed",
+				})
+			})
 		}
 
 		// 请求体大小限制：防止恶意大请求导致内存耗尽。

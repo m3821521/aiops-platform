@@ -507,9 +507,9 @@ func TestRecoverStaleActions(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	// P2-02: Startup Recovery 不再使用 updated_at threshold。
-	// 同步执行模型下，服务重启意味着所有 running 都已中断，统一恢复。
-	// 创建一个 stale RUNNING Action（UpdatedAt 在 10 分钟前）
+	// P0-05.2: Startup Recovery 只恢复 lease 已过期，或无 lease 且 updated_at < threshold 的 Action。
+	// 正常 heartbeat 的 Action（lease 未过期）禁止被 recovery 误杀。
+	// 创建一个 stale RUNNING Action（无 lease，UpdatedAt 在 10 分钟前，超过 5 分钟 threshold）
 	staleAction := &Action{
 		ActionType: ActionRestartPod,
 		Status:     StatusRunning,
@@ -524,8 +524,8 @@ func TestRecoverStaleActions(t *testing.T) {
 		t.Fatalf("create stale action failed: %v", err)
 	}
 
-	// 创建一个新鲜的 RUNNING Action（UpdatedAt 在 1 分钟前）
-	// P2-02: 启动时也会被恢复（同步执行模型下重启意味着中断）
+	// 创建一个新鲜的 RUNNING Action（无 lease，UpdatedAt 在 1 分钟前，未超过 threshold）
+	// P0-05.2: 不应该被恢复（可能是正常运行的任务）
 	freshAction := &Action{
 		ActionType: ActionRestartPod,
 		Status:     StatusRunning,
@@ -540,14 +540,32 @@ func TestRecoverStaleActions(t *testing.T) {
 		t.Fatalf("create fresh action failed: %v", err)
 	}
 
-	// 执行启动恢复（threshold 参数保留用于兼容，但不再使用）
+	// 创建一个有 lease 且未过期的 RUNNING Action（模拟正常 heartbeat）
+	// P0-05.2: 不应该被恢复
+	activeLease := now.Add(60 * time.Second)
+	activeAction := &Action{
+		ActionType:     ActionRestartPod,
+		Status:         StatusRunning,
+		TargetType:     "pod",
+		TargetName:     "test-pod-3",
+		Cluster:        "test",
+		Namespace:      "default",
+		CreatedAt:      now.Add(-1 * time.Minute),
+		UpdatedAt:      now.Add(-1 * time.Minute),
+		LeaseExpiresAt: &activeLease,
+	}
+	if err := repo.Create(ctx, activeAction); err != nil {
+		t.Fatalf("create active lease action failed: %v", err)
+	}
+
+	// 执行启动恢复（threshold = 5 分钟）
 	recovered, err := svc.RecoverStaleActions(ctx, 5*time.Minute)
 	if err != nil {
 		t.Fatalf("recover stale actions failed: %v", err)
 	}
-	// P2-02: 启动时所有 running 都被恢复
-	if recovered != 2 {
-		t.Errorf("expected 2 recovered actions on startup, got %d", recovered)
+	// P0-05.2: 只有 stale action（无 lease 且 updated_at < cutoff）被恢复
+	if recovered != 1 {
+		t.Errorf("expected 1 recovered action (stale only), got %d", recovered)
 	}
 
 	// 验证 stale Action 已被标记为 TIMEOUT
@@ -559,13 +577,22 @@ func TestRecoverStaleActions(t *testing.T) {
 		t.Errorf("expected stale action status %s, got %s", StatusTimeout, recoveredStale.Status)
 	}
 
-	// P2-02: 验证 fresh Action 也被标记为 TIMEOUT（启动时全量恢复）
+	// P0-05.2: 验证 fresh Action 仍然是 RUNNING（未被误恢复）
 	recoveredFresh, err := repo.FindByID(ctx, freshAction.ID)
 	if err != nil {
 		t.Fatalf("find fresh action failed: %v", err)
 	}
-	if recoveredFresh.Status != StatusTimeout {
-		t.Errorf("expected fresh action status %s on startup recovery, got %s", StatusTimeout, recoveredFresh.Status)
+	if recoveredFresh.Status != StatusRunning {
+		t.Errorf("expected fresh action status %s (not recovered), got %s", StatusRunning, recoveredFresh.Status)
+	}
+
+	// P0-05.2: 验证有 active lease 的 Action 仍然是 RUNNING（未被误恢复）
+	recoveredActive, err := repo.FindByID(ctx, activeAction.ID)
+	if err != nil {
+		t.Fatalf("find active action failed: %v", err)
+	}
+	if recoveredActive.Status != StatusRunning {
+		t.Errorf("expected active lease action status %s (not recovered), got %s", StatusRunning, recoveredActive.Status)
 	}
 }
 
@@ -812,18 +839,26 @@ func TestStartupRecovery_ExistingRunning(t *testing.T) {
 	repo := NewActionRepository(db)
 	ctx := context.Background()
 
-	// 创建多个 running action（包括有 lease 和无 lease 的）
-	createRunningAction(t, repo, nil)
-	future := time.Now().Add(60 * time.Second)
-	createRunningAction(t, repo, &future)
+	// P0-05.2: Startup Recovery 只恢复 lease 已过期，或无 lease 且 updated_at < cutoff 的 Action。
+	// 创建一个 lease 已过期的 running action（应该被恢复）
+	expiredLease := time.Now().Add(-60 * time.Second)
+	createRunningAction(t, repo, &expiredLease)
 
-	// 启动时恢复（不再使用 threshold，直接标记所有 running）
+	// 创建一个 lease 未过期的 running action（不应该被恢复）
+	futureLease := time.Now().Add(60 * time.Second)
+	createRunningAction(t, repo, &futureLease)
+
+	// 创建一个无 lease 且 updated_at 很新的 running action（不应该被恢复）
+	createRunningAction(t, repo, nil)
+
+	// 启动时恢复（threshold = 5 分钟）
 	count, err := repo.MarkStaleRunningAsTimeout(ctx, 5*time.Minute)
 	if err != nil {
 		t.Fatalf("startup recovery failed: %v", err)
 	}
-	if count != 2 {
-		t.Errorf("expected 2 recovered on startup, got %d", count)
+	// P0-05.2: 只有 lease 已过期的 action 被恢复（1 个）
+	if count != 1 {
+		t.Errorf("expected 1 recovered (expired lease only), got %d", count)
 	}
 }
 

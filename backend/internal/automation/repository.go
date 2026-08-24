@@ -90,19 +90,24 @@ func (r *ActionRepository) FindRunningByTarget(ctx context.Context, targetType, 
 	return &action, nil
 }
 
-// MarkStaleRunningAsTimeout 服务启动时将所有遗留 RUNNING 状态的 Action 标记为 TIMEOUT。
-// 同步执行模型下，服务重启意味着之前的 execution goroutine 已消失，无安全 Resume 能力。
-// 因此启动时所有遗留 RUNNING 都视为 interrupted execution。
+// MarkStaleRunningAsTimeout 服务启动时将遗留 RUNNING 状态的 Action 标记为 TIMEOUT。
+// P0-05.2: 只恢复 lease 已过期，或无 lease 且 updated_at 超过 threshold 的 Action。
+// 正常 heartbeat 的 Action（lease 未过期）禁止被 recovery 误杀。
 // 返回被更新的记录数。
 func (r *ActionRepository) MarkStaleRunningAsTimeout(ctx context.Context, threshold time.Duration) (int64, error) {
 	now := time.Now()
+	cutoff := now.Add(-threshold)
+	// 条件：
+	//   1. 有 lease 且已过期 (lease_expires_at IS NOT NULL AND lease_expires_at < NOW())
+	//   2. 无 lease 的旧数据且 updated_at < cutoff (lease_expires_at IS NULL AND updated_at < cutoff)
 	result := r.db.WithContext(ctx).Model(&Action{}).
-		Where("status = ?", StatusRunning).
+		Where("status = ? AND (lease_expires_at IS NOT NULL AND lease_expires_at < ?) OR (lease_expires_at IS NULL AND updated_at < ?)",
+			StatusRunning, now, cutoff).
 		Updates(map[string]interface{}{
-			"status":         StatusTimeout,
-			"finished_at":    now,
-			"reject_reason":  "worker crash: stale running action recovered on startup",
-			"updated_at":     now,
+			"status":          StatusTimeout,
+			"finished_at":     now,
+			"reject_reason":   "worker crash: stale running action recovered on startup",
+			"updated_at":      now,
 			"lease_expires_at": nil,
 		})
 	return result.RowsAffected, result.Error
@@ -153,14 +158,24 @@ func (r *ActionRepository) UpdateStatusIfRunning(ctx context.Context, id int64, 
 	return result.RowsAffected == 1, nil
 }
 
-// ClaimForExecution P0-05: 原子地将 Action 从 approved 声明为 running，并设置 lease。
+// ClaimForExecution P0-05 + P0-05.2: 原子地将 Action 从 approved 声明为 running，并设置 lease。
 // 使用 CAS（WHERE status='approved'）防止并发重复执行（TOCTOU 竞态）。
+// 同时使用 NOT EXISTS 子查询原子检查同一 target 是否有其他 running action，防止资源并发。
 // 返回 (claimed bool, error)。claimed=true 表示成功获得执行权。
 func (r *ActionRepository) ClaimForExecution(ctx context.Context, id int64, leaseDuration time.Duration) (bool, error) {
 	now := time.Now()
 	leaseExpires := now.Add(leaseDuration)
+	// 原子 CAS + 资源并发检查：
+	//   1. 当前 action 状态必须为 approved
+	//   2. 同一 cluster+target_type+target_name 不能有其他 running action
 	result := r.db.WithContext(ctx).Model(&Action{}).
-		Where("id = ? AND status = ?", id, StatusApproved).
+		Where("id = ? AND status = ? AND NOT EXISTS (?)",
+			id, StatusApproved,
+			r.db.Model(&Action{}).Select("1").Where(
+				"target_type = actions.target_type AND target_name = actions.target_name AND cluster = actions.cluster AND status = ? AND id != ?",
+				StatusRunning, id,
+			),
+		).
 		Updates(map[string]interface{}{
 			"status":           StatusRunning,
 			"updated_at":       now,
@@ -170,6 +185,19 @@ func (r *ActionRepository) ClaimForExecution(ctx context.Context, id int64, leas
 		return false, result.Error
 	}
 	return result.RowsAffected == 1, nil
+}
+
+// HasRunningByTarget 检查同一 target 是否有正在运行的 Action（用于 Claim 失败后区分原因）。
+func (r *ActionRepository) HasRunningByTarget(ctx context.Context, targetType, targetName, cluster string, excludeID int64) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&Action{}).
+		Where("target_type = ? AND target_name = ? AND cluster = ? AND status = ? AND id != ?",
+			targetType, targetName, cluster, StatusRunning, excludeID).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // ExecutionRepository 是 ActionExecution 的 Repository。
