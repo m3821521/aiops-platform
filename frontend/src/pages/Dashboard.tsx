@@ -136,8 +136,8 @@ export default function Dashboard() {
         if (token !== refreshTokenRef.current) return
         const actionList = res.items || []
         setActions(actionList)
-        // 对 success Action 加载 executions 获取 Verification（限制数量）
-        const successActions = actionList.filter((a) => a.status === 'success').slice(0, 20)
+        // 对 success Action 加载 executions 获取 Verification（限制数量，避免 N+1 限流）
+        const successActions = actionList.filter((a) => a.status === 'success').slice(0, 5)
         const execResults = await Promise.allSettled(
           successActions.map((a) => automationApi.executions(a.id).catch(() => [] as ActionExecution[]))
         )
@@ -160,31 +160,46 @@ export default function Dashboard() {
 
     await Promise.allSettled([incidentPromise, actionPromise, workflowPromise])
 
-    // === KPI 全量统计（使用 status/severity filter + page_size=1，读取 total）===
-    // 不受 page_size 限制，企业级大数据量下仍准确
-    const kpiRequests = [
+    // === KPI 全量统计（分批串行，避免瞬时并发触发限流）===
+    // 使用 status/severity filter + page_size=1，读取 total
+    const kpiRequestDefs = [
       // Incident: status=open × severity
-      incidentApi.list({ page: 1, page_size: 1, status: 'open', severity: 'critical' }),
-      incidentApi.list({ page: 1, page_size: 1, status: 'open', severity: 'warning' }),
-      incidentApi.list({ page: 1, page_size: 1, status: 'open', severity: 'info' }),
+      () => incidentApi.list({ page: 1, page_size: 1, status: 'open', severity: 'critical' }),
+      () => incidentApi.list({ page: 1, page_size: 1, status: 'open', severity: 'warning' }),
+      () => incidentApi.list({ page: 1, page_size: 1, status: 'open', severity: 'info' }),
       // Incident: status=acknowledged × severity
-      incidentApi.list({ page: 1, page_size: 1, status: 'acknowledged', severity: 'critical' }),
-      incidentApi.list({ page: 1, page_size: 1, status: 'acknowledged', severity: 'warning' }),
-      incidentApi.list({ page: 1, page_size: 1, status: 'acknowledged', severity: 'info' }),
+      () => incidentApi.list({ page: 1, page_size: 1, status: 'acknowledged', severity: 'critical' }),
+      () => incidentApi.list({ page: 1, page_size: 1, status: 'acknowledged', severity: 'warning' }),
+      () => incidentApi.list({ page: 1, page_size: 1, status: 'acknowledged', severity: 'info' }),
       // Action
-      automationApi.list({ page: 1, page_size: 1, status: 'running' }),
-      automationApi.list({ page: 1, page_size: 1, status: 'failed' }),
+      () => automationApi.list({ page: 1, page_size: 1, status: 'running' }),
+      () => automationApi.list({ page: 1, page_size: 1, status: 'failed' }),
       // Workflow
-      workflowApi.list({ page: 1, page_size: 1, status: 'running' }),
-      workflowApi.list({ page: 1, page_size: 1, status: 'failed' }),
+      () => workflowApi.list({ page: 1, page_size: 1, status: 'running' }),
+      () => workflowApi.list({ page: 1, page_size: 1, status: 'failed' }),
       // Alert critical firing
-      alertsApi.list({ page: 1, page_size: 1, status: 'firing', severity: 'critical' }),
+      () => alertsApi.list({ page: 1, page_size: 1, status: 'firing', severity: 'critical' }),
     ]
-    const kpiResults = await Promise.allSettled(kpiRequests)
+
+    // 分批串行执行，每批 3 个，间隔 150ms，避免触发限流
+    const kpiResults: any[] = []
+    const BATCH_SIZE = 3
+    const BATCH_DELAY = 150
+    for (let i = 0; i < kpiRequestDefs.length; i += BATCH_SIZE) {
+      if (token !== refreshTokenRef.current) break
+      const batch = kpiRequestDefs.slice(i, i + BATCH_SIZE)
+      const batchResults = await Promise.allSettled(batch.map((fn) => fn()))
+      kpiResults.push(...batchResults)
+      // 不是最后一批时延迟
+      if (i + BATCH_SIZE < kpiRequestDefs.length) {
+        await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY))
+      }
+    }
+
     if (token === refreshTokenRef.current) {
       const getTotal = (idx: number) => {
         const r = kpiResults[idx]
-        return r.status === 'fulfilled' ? (r.value?.total || 0) : 0
+        return r && r.status === 'fulfilled' ? (r.value?.total || 0) : 0
       }
       setKpiTotals({
         openCritical: getTotal(0),

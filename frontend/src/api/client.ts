@@ -54,7 +54,8 @@ request.interceptors.response.use(
       } else if (status === 409) {
         if (!isGet) message.error('操作冲突，请刷新后重试')
       } else if (status === 429) {
-        message.error('请求过于频繁，请稍后再试')
+        // GET 请求不全局弹窗，避免 Dashboard 批量请求被限流时弹出大量重复提示
+        if (!isGet) message.error('请求过于频繁，请稍后再试')
       } else if (status >= 500) {
         // GET 请求的 500 不全局弹窗（如 k8s/Prometheus 不可用），由页面显示空状态
         if (!isGet) {
