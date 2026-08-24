@@ -11,6 +11,8 @@ import {
 } from '@ant-design/icons';
 import { connectionApi, credentialApi } from '../../api/connection';
 import type { ConnectionView, Credential, TestConnectionResult } from '../../api/connection';
+import { useDataTrust } from '@/hooks/useDataTrust';
+import { DataTrustIndicator } from '@/components/DataTrustIndicator';
 
 const { Option } = Select;
 const { TextArea } = Input;
@@ -68,6 +70,9 @@ export default function ExternalConnections() {
   const [healthCheckError, setHealthCheckError] = useState<string | null>(null);
   const pollingRef = useRef<number | null>(null);
 
+  // P1-X.9: 统一 Data Trust（Connection API，5min backend HealthChecker）
+  const trust = useDataTrust({ source: 'connection' });
+
   useEffect(() => {
     loadConnections();
     loadCredentials();
@@ -83,14 +88,17 @@ export default function ExternalConnections() {
   }, [page, pageSize]);
 
   const loadConnections = async (silent = false) => {
+    const seq = trust.beginFetch();
     if (!silent) setLoading(true);
     try {
       const res = await connectionApi.list({ page, page_size: pageSize });
+      trust.markSuccess(seq);
       setConnections(res.items || []);
       setTotal(res.total || 0);
       setLastUpdated(new Date());
       setHealthCheckError(null);
     } catch (err: any) {
+      trust.markError(seq, err?.response?.data?.message || err?.message || '加载连接列表失败');
       if (!silent) {
         message.error('加载连接列表失败: ' + (err.response?.data?.message || err.message));
       }
@@ -471,6 +479,18 @@ export default function ExternalConnections() {
           </Space>
         }
       >
+        {/* P1-X.9: 统一 Data Trust Indicator */}
+        <div style={{ marginBottom: 12 }}>
+          <DataTrustIndicator
+            status={trust.status}
+            lastSuccessfulAt={trust.lastSuccessfulAt}
+            ageSeconds={trust.ageSeconds}
+            sourceLabel={trust.sourceLabel}
+            error={trust.error}
+            formatAge={trust.formatAge}
+            formatLastSuccessful={trust.formatLastSuccessful}
+          />
+        </div>
         {/* P1-PRODUCT-05: 数据新鲜度提示 */}
         <div style={{ marginBottom: 16, padding: '8px 12px', background: '#fafafa', borderRadius: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
           <Space size="middle">

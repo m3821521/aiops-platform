@@ -6,6 +6,8 @@ import type { Namespace } from '@/api/kubernetes'
 import { clusterApi } from '@/api/cluster'
 import type { Pod, Cluster } from '@/types'
 import PodDetail from './PodDetail'
+import { useDataTrust } from '@/hooks/useDataTrust'
+import { DataTrustIndicator } from '@/components/DataTrustIndicator'
 
 const POLL_INTERVAL = 15000
 
@@ -17,12 +19,12 @@ export default function Pods() {
   const [namespace, setNamespace] = useState<string>('')
   const [keyword, setKeyword] = useState<string>('')
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [selectedPod, setSelectedPod] = useState<Pod | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const pollingRef = useRef<number | null>(null)
-  const requestTokenRef = useRef(0)
+
+  // P1-X.9: 统一 Data Trust
+  const trust = useDataTrust({ source: 'kubernetes' })
 
   const fetchClusters = async () => {
     try {
@@ -45,19 +47,17 @@ export default function Pods() {
 
   const fetchData = async (silent = false) => {
     if (!cluster) return
-    const token = ++requestTokenRef.current
+    const seq = trust.beginFetch()
     if (!silent) setLoading(true)
     try {
       const res = await k8sApi.pods({ cluster, namespace: namespace || undefined })
-      if (token !== requestTokenRef.current) return // race condition guard
+      // Race protection: useDataTrust.markSuccess 内部检查 seq
+      trust.markSuccess(seq)
       setData(res || [])
-      setError(null)
-      setLastUpdated(new Date())
     } catch (err: any) {
-      if (token !== requestTokenRef.current) return
-      setError(err?.message || '加载 Pod 列表失败')
+      trust.markError(seq, err?.message || '加载 Pod 列表失败')
     } finally {
-      if (token === requestTokenRef.current && !silent) setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
@@ -96,14 +96,6 @@ export default function Pods() {
   const openDetail = (pod: Pod) => {
     setSelectedPod(pod)
     setDetailOpen(true)
-  }
-
-  const formatLastUpdated = () => {
-    if (!lastUpdated) return '未加载'
-    const diff = Date.now() - lastUpdated.getTime()
-    if (diff < 5000) return '刚刚更新'
-    if (diff < 60000) return `${Math.floor(diff / 1000)} 秒前更新`
-    return `${Math.floor(diff / 60000)} 分钟前更新`
   }
 
   const columns = [
@@ -146,13 +138,21 @@ export default function Pods() {
           </Space>
         }
       >
-        <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontSize: 12, color: '#8c8c8c' }}>{formatLastUpdated()} · 自动刷新 15s</span>
+        <div style={{ marginBottom: 8 }}>
+          <DataTrustIndicator
+            status={trust.status}
+            lastSuccessfulAt={trust.lastSuccessfulAt}
+            ageSeconds={trust.ageSeconds}
+            sourceLabel={trust.sourceLabel}
+            error={trust.error}
+            formatAge={trust.formatAge}
+            formatLastSuccessful={trust.formatLastSuccessful}
+          />
         </div>
-        {error && (
+        {trust.error && trust.status === 'stale' && (
           <Alert
             message="数据刷新失败"
-            description={error + '（当前显示的是上次成功获取的数据）'}
+            description={trust.error + '（当前显示的是上次成功获取的数据）'}
             type="warning"
             showIcon
             style={{ marginBottom: 12 }}

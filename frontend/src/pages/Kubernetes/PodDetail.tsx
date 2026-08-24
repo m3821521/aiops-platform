@@ -12,6 +12,8 @@ import { k8sApi } from '@/api/kubernetes'
 import { usePermission } from '@/utils/permission'
 import type { Pod, PodDetail as PodDetailType, Container } from '@/types'
 import dayjs from 'dayjs'
+import { useDataTrust } from '@/hooks/useDataTrust'
+import { DataTrustIndicator } from '@/components/DataTrustIndicator'
 
 const { Text, Paragraph } = Typography
 
@@ -40,6 +42,9 @@ export default function PodDetail({ pod, cluster, open, onClose, onRestarted }: 
   const [logsLoading, setLogsLoading] = useState(false)
   const [eventsLoading, setEventsLoading] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
+
+  // P1-X.9: 统一 Data Trust（PodDetail 来自 Kubernetes API）
+  const trust = useDataTrust({ source: 'kubernetes' })
   const [activeTab, setActiveTab] = useState('info')
   const [selectedContainer, setSelectedContainer] = useState<string>('')
   const [tailLines, setTailLines] = useState(200)
@@ -68,14 +73,17 @@ export default function PodDetail({ pod, cluster, open, onClose, onRestarted }: 
 
   const fetchDetail = async () => {
     if (!pod) return
+    const seq = trust.beginFetch()
     setDetailLoading(true)
     try {
       const res = await k8sApi.podDetail(pod.name, { cluster, namespace: pod.namespace })
+      trust.markSuccess(seq)
       setDetail(res)
       if (res.containers && res.containers.length > 0) {
         setSelectedContainer(res.containers[0].name)
       }
-    } catch {
+    } catch (err: any) {
+      trust.markError(seq, err?.message || '加载 Pod 详情失败')
       setDetail(null)
     } finally {
       setDetailLoading(false)
@@ -343,6 +351,17 @@ export default function PodDetail({ pod, cluster, open, onClose, onRestarted }: 
         )
       }
     >
+      <div style={{ marginBottom: 12 }}>
+        <DataTrustIndicator
+          status={trust.status}
+          lastSuccessfulAt={trust.lastSuccessfulAt}
+          ageSeconds={trust.ageSeconds}
+          sourceLabel={trust.sourceLabel}
+          error={trust.error}
+          formatAge={trust.formatAge}
+          formatLastSuccessful={trust.formatLastSuccessful}
+        />
+      </div>
       {/* Resize Handle：Drawer 左侧边缘，鼠标拖拽调整宽度 */}
       <div
         onPointerDown={handleResizeStart}

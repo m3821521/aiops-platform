@@ -1,12 +1,14 @@
 import { useEffect, useState, useCallback } from 'react'
 import {
-  Table, Tag, Card, Button, Spin, Space, Select, Input, Badge, Empty, Tooltip,
+  Table, Tag, Card, Button, Spin, Space, Select, Input, Badge, Empty, Tooltip, Alert,
 } from 'antd'
 import { ReloadOutlined, SearchOutlined, EyeOutlined } from '@ant-design/icons'
 import { incidentApi } from '@/api/incident'
 import type { Incident, PageResult } from '@/types'
 import dayjs from 'dayjs'
 import IncidentDetail from './IncidentDetail'
+import { useDataTrust } from '@/hooks/useDataTrust'
+import { DataTrustIndicator } from '@/components/DataTrustIndicator'
 
 const severityColor: Record<string, string> = {
   critical: 'error',
@@ -40,7 +42,11 @@ export default function Incidents() {
   const [detailId, setDetailId] = useState<number | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
 
+  // P1-X.9: 统一 Data Trust（Incident 来自 MySQL 业务状态）
+  const trust = useDataTrust({ source: 'mysql' })
+
   const fetchData = useCallback(async () => {
+    const seq = trust.beginFetch()
     setLoading(true)
     try {
       const params: any = { page, page_size: pageSize }
@@ -49,7 +55,10 @@ export default function Incidents() {
       if (namespaceFilter) params.namespace = namespaceFilter
       if (keyword) params.keyword = keyword
       const res = await incidentApi.list(params)
+      trust.markSuccess(seq)
       setData(res)
+    } catch (err: any) {
+      trust.markError(seq, err?.message || '加载事件列表失败')
     } finally {
       setLoading(false)
     }
@@ -206,6 +215,20 @@ export default function Incidents() {
           </Space>
         }
       >
+        <div style={{ marginBottom: 12 }}>
+          <DataTrustIndicator
+            status={trust.status}
+            lastSuccessfulAt={trust.lastSuccessfulAt}
+            ageSeconds={trust.ageSeconds}
+            sourceLabel={trust.sourceLabel}
+            error={trust.error}
+            formatAge={trust.formatAge}
+            formatLastSuccessful={trust.formatLastSuccessful}
+          />
+        </div>
+        {trust.error && trust.status === 'stale' && (
+          <Alert message="数据刷新失败" description={trust.error + '（当前显示的是上次成功获取的数据）'} type="warning" showIcon style={{ marginBottom: 12 }} />
+        )}
         <Spin spinning={loading}>
           {data && data.items.length > 0 ? (
             <Table

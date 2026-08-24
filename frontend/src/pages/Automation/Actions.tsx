@@ -12,6 +12,8 @@ import { connectionApi, type ConnectionView } from '@/api/connection'
 import { jenkinsApi } from '@/api/jenkins'
 import { argocdApi } from '@/api/argocd'
 import IncidentDetail from '@/pages/AIOps/IncidentDetail'
+import { useDataTrust } from '@/hooks/useDataTrust'
+import { DataTrustIndicator } from '@/components/DataTrustIndicator'
 
 const { Text } = Typography
 
@@ -97,7 +99,11 @@ export default function AutomationActions() {
   const [createActionType, setCreateActionType] = useState<string>('')
   const [paramList, setParamList] = useState<{ key: string; value: string }[]>([])
 
+  // P1-X.9: 统一 Data Trust（Action 来自 MySQL 业务状态）
+  const trust = useDataTrust({ source: 'mysql' })
+
   const load = useCallback(async () => {
+    const seq = trust.beginFetch()
     setLoading(true)
     try {
       const res = await automationApi.list({
@@ -107,9 +113,11 @@ export default function AutomationActions() {
         page,
         page_size: pageSize,
       })
+      trust.markSuccess(seq)
       setActions(res.items)
       setTotal(res.total)
     } catch (e: any) {
+      trust.markError(seq, e?.message || '加载操作列表失败')
       message.error('加载操作列表失败: ' + (e?.message || ''))
     } finally {
       setLoading(false)
@@ -482,6 +490,17 @@ export default function AutomationActions() {
           </Space>
         }
       >
+        <div style={{ marginBottom: 12 }}>
+          <DataTrustIndicator
+            status={trust.status}
+            lastSuccessfulAt={trust.lastSuccessfulAt}
+            ageSeconds={trust.ageSeconds}
+            sourceLabel={trust.sourceLabel}
+            error={trust.error}
+            formatAge={trust.formatAge}
+            formatLastSuccessful={trust.formatLastSuccessful}
+          />
+        </div>
         <Table
           rowKey="id"
           columns={columns}

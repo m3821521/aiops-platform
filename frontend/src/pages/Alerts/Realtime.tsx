@@ -12,6 +12,8 @@ import { alertsApi } from '@/api/alerts'
 import type { Alert, PageResult } from '@/types'
 import IncidentDetail from '@/pages/AIOps/IncidentDetail'
 import dayjs from 'dayjs'
+import { useDataTrust } from '@/hooks/useDataTrust'
+import { DataTrustIndicator } from '@/components/DataTrustIndicator'
 
 const severityColor: Record<string, string> = {
   critical: 'error',
@@ -41,14 +43,21 @@ export default function AlertList() {
   const [incidentDetailId, setIncidentDetailId] = useState<number | null>(null)
   const [incidentDetailOpen, setIncidentDetailOpen] = useState(false)
 
+  // P1-X.9: 统一 Data Trust（Alert 来自 Alertmanager）
+  const trust = useDataTrust({ source: 'alertmanager' })
+
   const fetchData = useCallback(async () => {
+    const seq = trust.beginFetch()
     setLoading(true)
     try {
       const params: any = { page, page_size: pageSize }
       if (statusFilter) params.status = statusFilter
       if (severityFilter) params.severity = severityFilter
       const res = await alertsApi.list(params)
+      trust.markSuccess(seq)
       setData(res)
+    } catch (err: any) {
+      trust.markError(seq, err?.message || '加载告警列表失败')
     } finally {
       setLoading(false)
     }
@@ -255,6 +264,20 @@ export default function AlertList() {
         </Space>
       }
     >
+      <div style={{ marginBottom: 12 }}>
+        <DataTrustIndicator
+          status={trust.status}
+          lastSuccessfulAt={trust.lastSuccessfulAt}
+          ageSeconds={trust.ageSeconds}
+          sourceLabel={trust.sourceLabel}
+          error={trust.error}
+          formatAge={trust.formatAge}
+          formatLastSuccessful={trust.formatLastSuccessful}
+        />
+      </div>
+      {trust.error && trust.status === 'stale' && (
+        <AlertBanner message="数据刷新失败" description={trust.error + '（当前显示的是上次成功获取的数据）'} type="warning" showIcon style={{ marginBottom: 12 }} />
+      )}
       <Spin spinning={loading}>
         {filtered.length > 0 || loading ? (
           <Table

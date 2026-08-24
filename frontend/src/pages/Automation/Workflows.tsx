@@ -9,6 +9,8 @@ import {
 import { workflowApi, type Workflow, type WorkflowExecution } from '@/api/workflow'
 import WorkflowExecutionDetail from './WorkflowExecutionDetail'
 import IncidentDetail from '@/pages/AIOps/IncidentDetail'
+import { useDataTrust } from '@/hooks/useDataTrust'
+import { DataTrustIndicator } from '@/components/DataTrustIndicator'
 
 const statusColor: Record<string, string> = {
   draft: 'default',
@@ -53,13 +55,19 @@ export default function Workflows() {
   const [execHistoryPage, setExecHistoryPage] = useState(1)
   const [execDetailId, setExecDetailId] = useState<number | null>(null)
 
+  // P1-X.9: 统一 Data Trust（Workflow 来自 MySQL 业务状态）
+  const trust = useDataTrust({ source: 'mysql' })
+
   const load = useCallback(async () => {
+    const seq = trust.beginFetch()
     setLoading(true)
     try {
       const res = await workflowApi.list({ page, page_size: pageSize })
+      trust.markSuccess(seq)
       setItems(res.items)
       setTotal(res.total)
     } catch (e: any) {
+      trust.markError(seq, e?.message || '加载工作流失败')
       message.error('加载工作流失败: ' + (e?.message || ''))
     } finally {
       setLoading(false)
@@ -208,6 +216,17 @@ export default function Workflows() {
         title={<Space><ApartmentOutlined /> 自动化工作流</Space>}
         extra={<Button onClick={load}>刷新</Button>}
       >
+        <div style={{ marginBottom: 12 }}>
+          <DataTrustIndicator
+            status={trust.status}
+            lastSuccessfulAt={trust.lastSuccessfulAt}
+            ageSeconds={trust.ageSeconds}
+            sourceLabel={trust.sourceLabel}
+            error={trust.error}
+            formatAge={trust.formatAge}
+            formatLastSuccessful={trust.formatLastSuccessful}
+          />
+        </div>
         <Table
           rowKey="id"
           columns={columns}

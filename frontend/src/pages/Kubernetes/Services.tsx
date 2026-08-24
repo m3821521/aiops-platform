@@ -5,6 +5,8 @@ import { k8sApi } from '@/api/kubernetes'
 import type { Namespace } from '@/api/kubernetes'
 import { clusterApi } from '@/api/cluster'
 import type { Service, Cluster } from '@/types'
+import { useDataTrust } from '@/hooks/useDataTrust'
+import { DataTrustIndicator } from '@/components/DataTrustIndicator'
 
 const POLL_INTERVAL = 15000
 
@@ -15,45 +17,37 @@ export default function Services() {
   const [cluster, setCluster] = useState<string>('')
   const [namespace, setNamespace] = useState<string>('')
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const pollingRef = useRef<number | null>(null)
-  const requestTokenRef = useRef(0)
+
+  const trust = useDataTrust({ source: 'kubernetes' })
 
   const fetchClusters = async () => {
     try {
       const res = await clusterApi.list()
       setClusters(res || [])
       if (res && res.length > 0 && !cluster) setCluster(res[0].name)
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
   }
 
   const fetchNamespaces = async (c: string) => {
     try {
       const res = await k8sApi.namespaces(c)
       setNamespaces(res || [])
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
   }
 
   const fetchData = async (silent = false) => {
     if (!cluster) return
-    const token = ++requestTokenRef.current
+    const seq = trust.beginFetch()
     if (!silent) setLoading(true)
     try {
       const res = await k8sApi.services({ cluster, namespace: namespace || undefined })
-      if (token !== requestTokenRef.current) return
+      trust.markSuccess(seq)
       setData(res || [])
-      setError(null)
-      setLastUpdated(new Date())
     } catch (err: any) {
-      if (token !== requestTokenRef.current) return
-      setError(err?.message || '加载 Service 列表失败')
+      trust.markError(seq, err?.message || '加载 Service 列表失败')
     } finally {
-      if (token === requestTokenRef.current && !silent) setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
@@ -68,12 +62,8 @@ export default function Services() {
 
   useEffect(() => {
     if (!cluster) return
-    pollingRef.current = window.setInterval(() => {
-      fetchData(true)
-    }, POLL_INTERVAL)
-    return () => {
-      if (pollingRef.current) clearInterval(pollingRef.current)
-    }
+    pollingRef.current = window.setInterval(() => { fetchData(true) }, POLL_INTERVAL)
+    return () => { if (pollingRef.current) clearInterval(pollingRef.current) }
   }, [cluster, namespace])
 
   const typeColor = (type: string) => {
@@ -83,28 +73,16 @@ export default function Services() {
     return 'default'
   }
 
-  const formatLastUpdated = () => {
-    if (!lastUpdated) return '未加载'
-    const diff = Date.now() - lastUpdated.getTime()
-    if (diff < 5000) return '刚刚更新'
-    if (diff < 60000) return `${Math.floor(diff / 1000)} 秒前更新`
-    return `${Math.floor(diff / 60000)} 分钟前更新`
-  }
-
   const columns = [
     { title: 'Service', dataIndex: 'name', key: 'name', render: (t: string) => <span style={{ fontWeight: 500 }}>{t}</span> },
     { title: 'Namespace', dataIndex: 'namespace', key: 'namespace', render: (t: string) => <Tag>{t}</Tag> },
     { title: '类型', dataIndex: 'type', key: 'type', render: (t: string) => <Tag color={typeColor(t)}>{t}</Tag> },
     { title: 'Cluster IP', dataIndex: 'cluster_ip', key: 'cluster_ip', render: (v: string) => v || '-' },
     {
-      title: '端口',
-      dataIndex: 'ports',
-      key: 'ports',
+      title: '端口', dataIndex: 'ports', key: 'ports',
       render: (ports: Service['ports']) =>
         ports && ports.length > 0
-          ? ports.map((p, i) => (
-              <Tag key={i}>{p.port}/{p.protocol} → {p.target_port}</Tag>
-            ))
+          ? ports.map((p, i) => <Tag key={i}>{p.port}/{p.protocol} → {p.target_port}</Tag>)
           : '-',
     },
     { title: 'Age', dataIndex: 'age', key: 'age', render: (v: string) => v || '-' },
@@ -123,17 +101,19 @@ export default function Services() {
         </Space>
       }
     >
-      <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ fontSize: 12, color: '#8c8c8c' }}>{formatLastUpdated()} · 自动刷新 15s</span>
-      </div>
-      {error && (
-        <Alert
-          message="数据刷新失败"
-          description={error + '（当前显示的是上次成功获取的数据）'}
-          type="warning"
-          showIcon
-          style={{ marginBottom: 12 }}
+      <div style={{ marginBottom: 8 }}>
+        <DataTrustIndicator
+          status={trust.status}
+          lastSuccessfulAt={trust.lastSuccessfulAt}
+          ageSeconds={trust.ageSeconds}
+          sourceLabel={trust.sourceLabel}
+          error={trust.error}
+          formatAge={trust.formatAge}
+          formatLastSuccessful={trust.formatLastSuccessful}
         />
+      </div>
+      {trust.error && trust.status === 'stale' && (
+        <Alert message="数据刷新失败" description={trust.error + '（当前显示的是上次成功获取的数据）'} type="warning" showIcon style={{ marginBottom: 12 }} />
       )}
       <Spin spinning={loading}>
         <Table columns={columns} dataSource={data} rowKey="name" pagination={{ pageSize: 20 }} size="middle" />

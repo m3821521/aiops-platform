@@ -23,6 +23,9 @@ import type { TopologyGraph, TopologyNode, TopologyNodeType, TopologyNodeStatus 
 
 const { Text } = Typography
 
+import { useDataTrust } from '@/hooks/useDataTrust'
+import { DataTrustIndicator } from '@/components/DataTrustIndicator'
+
 const nodeColor: Record<TopologyNodeType, string> = {
   node: '#722ed1',
   pod: '#1890ff',
@@ -57,7 +60,9 @@ export default function Topology() {
   const [graph, setGraph] = useState<TopologyGraph | null>(null)
   const [loading, setLoading] = useState(false)
   const [selectedNode, setSelectedNode] = useState<TopologyNode | null>(null)
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+
+  // P1-X.9: 统一 Data Trust（Topology: K8s + Prometheus，60s Redis cache）
+  const trust = useDataTrust({ source: 'topology' })
 
   const fetchClusters = useCallback(async () => {
     try {
@@ -74,13 +79,14 @@ export default function Topology() {
   }, [cluster])
 
   const fetchGraph = useCallback(async () => {
+    const seq = trust.beginFetch()
     setLoading(true)
     try {
       const data = await topologyApi.getGraph({ cluster, namespace: namespace || undefined, refresh: true })
+      trust.markSuccess(seq)
       setGraph(data)
-      setLastUpdated(new Date())
-    } catch (e) {
-      console.error('fetch topology failed', e)
+    } catch (e: any) {
+      trust.markError(seq, e?.message || '获取拓扑数据失败')
     } finally {
       setLoading(false)
     }
@@ -232,9 +238,9 @@ export default function Topology() {
                 {graph.nodes.length} 节点 · {graph.edges.length} 关系
               </Text>
             )}
-            {lastUpdated && (
+            {trust.lastSuccessfulAt && (
               <Text type="secondary" style={{ fontSize: 12 }}>
-                · {Date.now() - lastUpdated.getTime() < 5000 ? '刚刚更新' : `${Math.floor((Date.now() - lastUpdated.getTime()) / 1000)} 秒前更新`} · 自动刷新 30s
+                · {trust.formatAge()} · 自动刷新 30s
               </Text>
             )}
           </Space>
@@ -245,6 +251,17 @@ export default function Topology() {
           </Button>
         }
       >
+        <div style={{ marginBottom: 12 }}>
+          <DataTrustIndicator
+            status={trust.status}
+            lastSuccessfulAt={trust.lastSuccessfulAt}
+            ageSeconds={trust.ageSeconds}
+            sourceLabel={trust.sourceLabel}
+            error={trust.error}
+            formatAge={trust.formatAge}
+            formatLastSuccessful={trust.formatLastSuccessful}
+          />
+        </div>
         <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
           <Col span={4}>
             <Select

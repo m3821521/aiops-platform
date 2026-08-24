@@ -11,12 +11,15 @@ import {
   Col,
   Badge,
   Empty,
+  Alert,
 } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { anomalyApi } from '../../api/anomaly'
 import type { AnomalyRecord, AnomalyListFilter } from '../../types'
 import AnomalyDetail from './AnomalyDetail'
 import IncidentDetail from './IncidentDetail'
+import { useDataTrust } from '@/hooks/useDataTrust'
+import { DataTrustIndicator } from '@/components/DataTrustIndicator'
 
 const severityColor: Record<string, string> = {
   critical: 'red',
@@ -43,14 +46,19 @@ export default function Anomaly() {
   const [incidentDetailId, setIncidentDetailId] = useState<number | null>(null)
   const [incidentDetailOpen, setIncidentDetailOpen] = useState(false)
 
+  // P1-X.9: 统一 Data Trust（Anomaly 来自 MySQL + Prometheus）
+  const trust = useDataTrust({ source: 'prometheus' })
+
   const fetchData = async () => {
+    const seq = trust.beginFetch()
     setLoading(true)
     try {
       const res = await anomalyApi.list({ ...filter, metric: keyword || undefined, page, page_size: pageSize })
+      trust.markSuccess(seq)
       setData(res.items || [])
       setTotal(res.total || 0)
-    } catch (e) {
-      console.error('fetch anomaly failed', e)
+    } catch (e: any) {
+      trust.markError(seq, e?.message || '加载异常列表失败')
     } finally {
       setLoading(false)
     }
@@ -260,6 +268,21 @@ export default function Anomaly() {
             />
           </Col>
         </Row>
+
+        <div style={{ marginBottom: 12 }}>
+          <DataTrustIndicator
+            status={trust.status}
+            lastSuccessfulAt={trust.lastSuccessfulAt}
+            ageSeconds={trust.ageSeconds}
+            sourceLabel={trust.sourceLabel}
+            error={trust.error}
+            formatAge={trust.formatAge}
+            formatLastSuccessful={trust.formatLastSuccessful}
+          />
+        </div>
+        {trust.error && trust.status === 'stale' && (
+          <Alert message="数据刷新失败" description={trust.error + '（当前显示的是上次成功获取的数据）'} type="warning" showIcon style={{ marginBottom: 12 }} />
+        )}
 
         <Table
           scroll={{ x: 'max-content' }}

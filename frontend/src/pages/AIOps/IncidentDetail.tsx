@@ -16,6 +16,8 @@ import { automationApi, type AutomationAction, type ActionExecution } from '@/ap
 import { workflowApi, type Workflow, type WorkflowExecution, type WorkflowStepExecution } from '@/api/workflow'
 import type { Incident, IncidentSignal, TopologyNode, RCAResult, AIAnalysisResult } from '@/types'
 import dayjs from 'dayjs'
+import { useDataTrust } from '@/hooks/useDataTrust'
+import { DataTrustIndicator } from '@/components/DataTrustIndicator'
 
 const severityColor: Record<string, string> = {
   critical: 'error',
@@ -66,6 +68,9 @@ export default function IncidentDetail({ id, open, onClose, onChanged }: Props) 
   const [signals, setSignals] = useState<IncidentSignal[]>([])
   const [loading, setLoading] = useState(false)
   const [tab, setTab] = useState('overview')
+
+  // P1-X.9: 统一 Data Trust（IncidentDetail 来自 MySQL + 多 Provider）
+  const trust = useDataTrust({ source: 'mysql' })
   const [topologyNodes, setTopologyNodes] = useState<TopologyNode[]>([])
   const [topologyLoading, setTopologyLoading] = useState(false)
   const [rcaResult, setRcaResult] = useState<RCAResult | null>(null)
@@ -478,14 +483,18 @@ export default function IncidentDetail({ id, open, onClose, onChanged }: Props) 
 
   const fetchDetail = useCallback(async () => {
     if (!id) return
+    const seq = trust.beginFetch()
     setLoading(true)
     try {
       const [incRes, sigRes] = await Promise.all([
         incidentApi.get(id),
         incidentApi.signals(id),
       ])
+      trust.markSuccess(seq)
       setIncident(incRes)
       setSignals(sigRes.items || [])
+    } catch (err: any) {
+      trust.markError(seq, err?.message || '加载事件详情失败')
     } finally {
       setLoading(false)
     }
@@ -1775,6 +1784,17 @@ export default function IncidentDetail({ id, open, onClose, onChanged }: Props) 
         </Button>
       }
     >
+      <div style={{ marginBottom: 12 }}>
+        <DataTrustIndicator
+          status={trust.status}
+          lastSuccessfulAt={trust.lastSuccessfulAt}
+          ageSeconds={trust.ageSeconds}
+          sourceLabel={trust.sourceLabel}
+          error={trust.error}
+          formatAge={trust.formatAge}
+          formatLastSuccessful={trust.formatLastSuccessful}
+        />
+      </div>
       <Spin spinning={loading}>
         <Tabs
           activeKey={tab}
