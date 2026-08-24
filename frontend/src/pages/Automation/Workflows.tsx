@@ -181,7 +181,7 @@ export default function Workflows() {
     },
     { title: '创建时间', dataIndex: 'created_at', width: 170, render: (t: string) => new Date(t).toLocaleString() },
     {
-      title: '操作', width: 220,
+      title: '操作', width: 220, fixed: 'right' as const,
       render: (_: any, record: Workflow) => (
         <Space size={4}>
           <Button size="small" type="link" onClick={() => openDetail(record)}>详情</Button>

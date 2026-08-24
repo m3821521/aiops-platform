@@ -409,6 +409,7 @@ export default function AutomationActions() {
     {
       title: '操作',
       width: 200,
+      fixed: 'right' as const,
       render: (_: any, record: AutomationAction) => (
         <Space size={4}>
           <Button size="small" type="link" onClick={() => openDetail(record)}>详情</Button>
