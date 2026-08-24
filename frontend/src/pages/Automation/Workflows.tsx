@@ -68,6 +68,14 @@ export default function Workflows() {
 
   useEffect(() => { load() }, [load])
 
+  // P1-PRODUCT-06: 30s 自动轮询，确保 running → completed/failed 自动更新
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      load()
+    }, 30000)
+    return () => clearInterval(timer)
+  }, [load])
+
   const openDetail = async (wf: Workflow) => {
     try {
       const full = await workflowApi.get(wf.id)

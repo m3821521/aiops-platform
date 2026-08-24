@@ -57,6 +57,7 @@ export default function Topology() {
   const [graph, setGraph] = useState<TopologyGraph | null>(null)
   const [loading, setLoading] = useState(false)
   const [selectedNode, setSelectedNode] = useState<TopologyNode | null>(null)
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
   const fetchClusters = useCallback(async () => {
     try {
@@ -77,6 +78,7 @@ export default function Topology() {
     try {
       const data = await topologyApi.getGraph({ cluster, namespace: namespace || undefined, refresh: true })
       setGraph(data)
+      setLastUpdated(new Date())
     } catch (e) {
       console.error('fetch topology failed', e)
     } finally {
@@ -90,6 +92,14 @@ export default function Topology() {
 
   useEffect(() => {
     fetchGraph()
+  }, [fetchGraph])
+
+  // P1-PRODUCT-06: 30s 自动轮询（Topology 缓存 60s，轮询 30s 可接受）
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      fetchGraph()
+    }, 30000)
+    return () => clearInterval(timer)
   }, [fetchGraph])
 
   // 渲染 ECharts Graph
@@ -220,6 +230,11 @@ export default function Topology() {
             {graph && (
               <Text type="secondary" style={{ fontSize: 12 }}>
                 {graph.nodes.length} 节点 · {graph.edges.length} 关系
+              </Text>
+            )}
+            {lastUpdated && (
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                · {Date.now() - lastUpdated.getTime() < 5000 ? '刚刚更新' : `${Math.floor((Date.now() - lastUpdated.getTime()) / 1000)} 秒前更新`} · 自动刷新 30s
               </Text>
             )}
           </Space>

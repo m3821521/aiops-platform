@@ -118,6 +118,14 @@ export default function AutomationActions() {
 
   useEffect(() => { load() }, [load])
 
+  // P1-PRODUCT-06: 30s 自动轮询，确保 running → success/failed 自动更新
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      load()
+    }, 30000)
+    return () => clearInterval(timer)
+  }, [load])
+
   const handleApprove = async (id: number) => {
     Modal.confirm({
       title: '确认审批',

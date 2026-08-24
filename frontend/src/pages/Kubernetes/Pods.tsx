@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react'
-import { Table, Tag, Card, Button, Spin, Select, Space, Input } from 'antd'
+import { useEffect, useState, useRef } from 'react'
+import { Table, Tag, Card, Button, Spin, Select, Space, Input, Alert } from 'antd'
 import { ReloadOutlined, EyeOutlined } from '@ant-design/icons'
 import { k8sApi } from '@/api/kubernetes'
 import type { Namespace } from '@/api/kubernetes'
 import { clusterApi } from '@/api/cluster'
 import type { Pod, Cluster } from '@/types'
 import PodDetail from './PodDetail'
+
+const POLL_INTERVAL = 15000
 
 export default function Pods() {
   const [data, setData] = useState<Pod[]>([])
@@ -15,8 +17,12 @@ export default function Pods() {
   const [namespace, setNamespace] = useState<string>('')
   const [keyword, setKeyword] = useState<string>('')
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [selectedPod, setSelectedPod] = useState<Pod | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
+  const pollingRef = useRef<number | null>(null)
+  const requestTokenRef = useRef(0)
 
   const fetchClusters = async () => {
     try {
@@ -37,24 +43,44 @@ export default function Pods() {
     }
   }
 
-  const fetchData = async () => {
+  const fetchData = async (silent = false) => {
     if (!cluster) return
-    setLoading(true)
+    const token = ++requestTokenRef.current
+    if (!silent) setLoading(true)
     try {
       const res = await k8sApi.pods({ cluster, namespace: namespace || undefined })
+      if (token !== requestTokenRef.current) return // race condition guard
       setData(res || [])
+      setError(null)
+      setLastUpdated(new Date())
+    } catch (err: any) {
+      if (token !== requestTokenRef.current) return
+      setError(err?.message || '加载 Pod 列表失败')
     } finally {
-      setLoading(false)
+      if (token === requestTokenRef.current && !silent) setLoading(false)
     }
   }
 
   useEffect(() => { fetchClusters() }, [])
+
+  // cluster 或 namespace 变化时重新请求
   useEffect(() => {
     if (cluster) {
       fetchNamespaces(cluster)
       fetchData()
     }
-  }, [cluster])
+  }, [cluster, namespace])
+
+  // 15s 自动轮询
+  useEffect(() => {
+    if (!cluster) return
+    pollingRef.current = window.setInterval(() => {
+      fetchData(true) // silent refresh
+    }, POLL_INTERVAL)
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current)
+    }
+  }, [cluster, namespace])
 
   const statusColor = (status: string) => {
     if (status === 'Running') return 'success'
@@ -70,6 +96,14 @@ export default function Pods() {
   const openDetail = (pod: Pod) => {
     setSelectedPod(pod)
     setDetailOpen(true)
+  }
+
+  const formatLastUpdated = () => {
+    if (!lastUpdated) return '未加载'
+    const diff = Date.now() - lastUpdated.getTime()
+    if (diff < 5000) return '刚刚更新'
+    if (diff < 60000) return `${Math.floor(diff / 1000)} 秒前更新`
+    return `${Math.floor(diff / 60000)} 分钟前更新`
   }
 
   const columns = [
@@ -108,10 +142,22 @@ export default function Pods() {
             <Select value={namespace} onChange={setNamespace} style={{ width: 160 }} placeholder="所有命名空间" allowClear
               options={namespaces.map((n) => ({ label: n.name, value: n.name }))} />
             <Input.Search placeholder="搜索 Pod" value={keyword} onChange={(e) => setKeyword(e.target.value)} style={{ width: 180 }} allowClear />
-            <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>刷新</Button>
+            <Button icon={<ReloadOutlined />} onClick={() => fetchData()} loading={loading}>刷新</Button>
           </Space>
         }
       >
+        <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: 12, color: '#8c8c8c' }}>{formatLastUpdated()} · 自动刷新 15s</span>
+        </div>
+        {error && (
+          <Alert
+            message="数据刷新失败"
+            description={error + '（当前显示的是上次成功获取的数据）'}
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12 }}
+          />
+        )}
         <Spin spinning={loading}>
           <Table columns={columns} dataSource={filtered} rowKey="name" pagination={{ pageSize: 20 }} size="middle" />
         </Spin>
@@ -122,7 +168,7 @@ export default function Pods() {
         cluster={cluster}
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
-        onRestarted={fetchData}
+        onRestarted={() => fetchData()}
       />
     </>
   )
