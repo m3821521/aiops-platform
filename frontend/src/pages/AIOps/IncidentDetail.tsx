@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Drawer, Tabs, Descriptions, Tag, Spin, Timeline, Empty, Button, Space,
@@ -12,7 +12,8 @@ import { incidentApi, type EvidenceBundle } from '@/api/incident'
 import { topologyApi } from '@/api/topology'
 import { rcaApi } from '@/api/rca'
 import { aiAnalysisApi } from '@/api/aiAnalysis'
-import { automationApi } from '@/api/automation'
+import { automationApi, type AutomationAction, type ActionExecution } from '@/api/automation'
+import { workflowApi, type Workflow, type WorkflowExecution, type WorkflowStepExecution } from '@/api/workflow'
 import type { Incident, IncidentSignal, TopologyNode, RCAResult, AIAnalysisResult } from '@/types'
 import dayjs from 'dayjs'
 
@@ -73,6 +74,407 @@ export default function IncidentDetail({ id, open, onClose, onChanged }: Props) 
   const [aiLoading, setAiLoading] = useState(false)
   const [evidence, setEvidence] = useState<EvidenceBundle | null>(null)
   const [evidenceLoading, setEvidenceLoading] = useState(false)
+
+  // P0-PRODUCT-02: Incident Action Execution Closure
+  const [incidentActions, setIncidentActions] = useState<AutomationAction[]>([])
+  const [actionsLoading, setActionsLoading] = useState(false)
+  const [selectedActionId, setSelectedActionId] = useState<number | null>(null)
+  const [actionExecutions, setActionExecutions] = useState<ActionExecution[]>([])
+  const [executionsLoading, setExecutionsLoading] = useState(false)
+
+  // P0-PRODUCT-03: Incident Workflow Orchestration
+  const [incidentWorkflows, setIncidentWorkflows] = useState<Workflow[]>([])
+  const [workflowsLoading, setWorkflowsLoading] = useState(false)
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<number | null>(null)
+  const [workflowExecutions, setWorkflowExecutions] = useState<WorkflowExecution[]>([])
+  const [workflowExecLoading, setWorkflowExecLoading] = useState(false)
+  const [createWorkflowOpen, setCreateWorkflowOpen] = useState(false)
+  const [newWorkflowName, setNewWorkflowName] = useState('')
+  const [newWorkflowDesc, setNewWorkflowDesc] = useState('')
+  const pollingRef = useRef<number | null>(null)
+  const currentIdRef = useRef<number | null>(null)
+
+  const actionStatusColor: Record<string, string> = {
+    proposed: 'default',
+    pending_approval: 'warning',
+    approved: 'blue',
+    rejected: 'default',
+    running: 'processing',
+    success: 'success',
+    failed: 'error',
+    timeout: 'error',
+    cancelled: 'default',
+  }
+
+  const actionStatusLabel: Record<string, string> = {
+    proposed: '待提交',
+    pending_approval: '待审批',
+    approved: '已审批',
+    rejected: '已拒绝',
+    running: '执行中',
+    success: '执行成功',
+    failed: '执行失败',
+    timeout: '执行超时',
+    cancelled: '已取消',
+  }
+
+  const workflowStatusColor: Record<string, string> = {
+    draft: 'default',
+    pending_approval: 'warning',
+    approved: 'blue',
+    running: 'processing',
+    success: 'success',
+    failed: 'error',
+    cancelled: 'default',
+  }
+
+  const workflowStatusLabel: Record<string, string> = {
+    draft: '草稿',
+    pending_approval: '待审批',
+    approved: '已审批',
+    running: '执行中',
+    success: '执行成功',
+    failed: '执行失败',
+    cancelled: '已取消',
+  }
+
+  const stepStatusColor: Record<string, string> = {
+    pending: 'default',
+    running: 'processing',
+    success: 'success',
+    failed: 'error',
+    skipped: 'default',
+    timeout: 'warning',
+  }
+
+  const stepTypeLabel: Record<string, string> = {
+    observation: '观察',
+    investigation: '调查',
+    automation: '自动化',
+    verification: '验证',
+  }
+
+  const execStatusColor: Record<string, string> = {
+    pending: 'default',
+    running: 'processing',
+    success: 'success',
+    failed: 'error',
+    timeout: 'warning',
+    cancelled: 'default',
+  }
+
+  const parseVerification = (resultJson?: string) => {
+    if (!resultJson) return null
+    try {
+      const parsed = JSON.parse(resultJson)
+      return parsed?.data?.verification || parsed?.verification || null
+    } catch {
+      return null
+    }
+  }
+
+  const hasRunningAction = incidentActions.some((a) => a.status === 'running' || a.status === 'approved')
+
+  const loadIncidentActions = useCallback(async () => {
+    if (!id) return
+    if (currentIdRef.current !== id) return
+    setActionsLoading(true)
+    try {
+      const res = await automationApi.list({ incident_id: id, page_size: 50 })
+      if (currentIdRef.current !== id) return
+      setIncidentActions(res.items || [])
+      // 自动加载 success Action 的 Execution，确保 Verification 数据可用
+      const successActions = (res.items || []).filter((a) => a.status === 'success')
+      for (const action of successActions) {
+        if (currentIdRef.current !== id) return
+        try {
+          const execs = await automationApi.executions(action.id)
+          if (currentIdRef.current !== id) return
+          setActionExecutions((prev) => {
+            const filtered = prev.filter((e) => e.action_id !== action.id)
+            return [...filtered, ...(execs || [])]
+          })
+        } catch {
+          // ignore individual execution load failure
+        }
+      }
+    } catch {
+      if (currentIdRef.current === id) setIncidentActions([])
+    } finally {
+      if (currentIdRef.current === id) setActionsLoading(false)
+    }
+  }, [id])
+
+  const loadIncidentWorkflows = useCallback(async () => {
+    if (!id) return
+    if (currentIdRef.current !== id) return
+    setWorkflowsLoading(true)
+    try {
+      const res = await workflowApi.list({ incident_id: id, page_size: 50 })
+      if (currentIdRef.current !== id) return
+      setIncidentWorkflows(res.items || [])
+      // 自动加载 success Workflow 的 Execution，确保 Verification 数据可用
+      const successWfs = (res.items || []).filter((w) => w.status === 'success')
+      for (const wf of successWfs) {
+        if (currentIdRef.current !== id) return
+        try {
+          const execRes = await workflowApi.listExecutions(wf.id, { page_size: 5 })
+          if (currentIdRef.current !== id) return
+          setWorkflowExecutions((prev) => {
+            const filtered = prev.filter((e) => e.workflow_id !== wf.id)
+            return [...filtered, ...(execRes.items || [])]
+          })
+        } catch {
+          // ignore individual execution load failure
+        }
+      }
+    } catch {
+      if (currentIdRef.current === id) setIncidentWorkflows([])
+    } finally {
+      if (currentIdRef.current === id) setWorkflowsLoading(false)
+    }
+  }, [id])
+
+  const hasRunningWorkflow = incidentWorkflows.some((w) => w.status === 'running' || w.status === 'approved')
+  const hasRunningAny = hasRunningAction || hasRunningWorkflow
+
+  const stopPolling = useCallback(() => {
+    if (pollingRef.current !== null) {
+      clearInterval(pollingRef.current)
+      pollingRef.current = null
+    }
+  }, [])
+
+  const startPolling = useCallback(() => {
+    stopPolling()
+    pollingRef.current = window.setInterval(() => {
+      loadIncidentActions()
+      loadIncidentWorkflows()
+    }, 4000)
+  }, [loadIncidentActions, loadIncidentWorkflows, stopPolling])
+
+  // 加载关联 Action 列表
+  useEffect(() => {
+    if (!open || !id) return
+    currentIdRef.current = id
+    loadIncidentActions()
+    return () => {
+      stopPolling()
+    }
+  }, [open, id, loadIncidentActions, stopPolling])
+
+  // 有 running/approved Action 或 Workflow 时启动轮询
+  useEffect(() => {
+    if (hasRunningAny && open) {
+      startPolling()
+    } else {
+      stopPolling()
+    }
+  }, [hasRunningAny, open, startPolling, stopPolling])
+
+  // 选中 Action 时加载执行记录
+  useEffect(() => {
+    if (!selectedActionId) {
+      setActionExecutions([])
+      return
+    }
+    setExecutionsLoading(true)
+    automationApi.executions(selectedActionId)
+      .then((data) => setActionExecutions(data || []))
+      .catch(() => setActionExecutions([]))
+      .finally(() => setExecutionsLoading(false))
+  }, [selectedActionId, incidentActions])
+
+  const handleApprove = async (actionId: number) => {
+    try {
+      await automationApi.approve(actionId)
+      message.success('操作已审批通过')
+      loadIncidentActions()
+    } catch (e: any) {
+      if (e?.response?.status === 409) {
+        message.warning('操作状态已变更，正在刷新...')
+        loadIncidentActions()
+      } else {
+        message.error('审批失败: ' + (e?.message || ''))
+      }
+    }
+  }
+
+  const handleReject = (actionId: number) => {
+    Modal.confirm({
+      title: '拒绝操作',
+      content: '请输入拒绝原因：',
+      onOk: async () => {
+        try {
+          await automationApi.reject(actionId, '用户拒绝')
+          message.success('操作已拒绝')
+          loadIncidentActions()
+        } catch (e: any) {
+          message.error('拒绝失败: ' + (e?.message || ''))
+        }
+      },
+    })
+  }
+
+  const handleExecute = async (actionId: number) => {
+    try {
+      const result = await automationApi.execute(actionId)
+      if (result.success) {
+        message.success('操作执行完成')
+      } else {
+        message.error('操作执行失败: ' + (result.message || result.error || ''))
+      }
+      loadIncidentActions()
+      if (selectedActionId === actionId) {
+        setSelectedActionId(null)
+        setTimeout(() => setSelectedActionId(actionId), 300)
+      }
+    } catch (e: any) {
+      if (e?.response?.status === 409) {
+        message.warning('操作状态已变更，正在刷新...')
+        loadIncidentActions()
+      } else {
+        message.error('执行失败: ' + (e?.message || ''))
+      }
+    }
+  }
+
+  const handleResolveIncident = async () => {
+    if (!id) return
+    Modal.confirm({
+      title: '解决事件',
+      content: '验证已通过，确认将此事件标记为已解决？',
+      onOk: async () => {
+        try {
+          await incidentApi.resolve(id)
+          message.success('事件已解决')
+          fetchDetail()
+          onChanged()
+        } catch (e: any) {
+          message.error('解决事件失败: ' + (e?.message || ''))
+        }
+      },
+    })
+  }
+
+  // ===== P0-PRODUCT-03: Workflow Orchestration =====
+
+  // 加载关联 Workflow 列表
+  useEffect(() => {
+    if (!open || !id) return
+    loadIncidentWorkflows()
+  }, [open, id, loadIncidentWorkflows])
+
+  // 选中 Workflow 时加载执行记录
+  useEffect(() => {
+    if (!selectedWorkflowId) {
+      setWorkflowExecutions([])
+      return
+    }
+    setWorkflowExecLoading(true)
+    workflowApi.listExecutions(selectedWorkflowId, { page_size: 10 })
+      .then((data) => setWorkflowExecutions(data.items || []))
+      .catch(() => setWorkflowExecutions([]))
+      .finally(() => setWorkflowExecLoading(false))
+  }, [selectedWorkflowId, incidentWorkflows])
+
+  const handleCreateWorkflow = async () => {
+    if (!id || !incident) return
+    if (!newWorkflowName.trim()) {
+      message.warning('请输入 Workflow 名称')
+      return
+    }
+    try {
+      const wf = await workflowApi.create({
+        name: newWorkflowName.trim(),
+        description: newWorkflowDesc.trim() || `基于事件 #${id}: ${incident.title}`,
+        incident_id: id,
+        risk: incident.severity === 'critical' ? 'high' : incident.severity === 'warning' ? 'medium' : 'low',
+        steps: [
+          { order: 1, name: '系统观察', action_type: 'observation', status: 'pending' },
+          { order: 2, name: '故障调查', action_type: 'investigation', status: 'pending' },
+          { order: 3, name: '自动化处置', action_type: 'automation', status: 'pending' },
+          { order: 4, name: '结果验证', action_type: 'verification', status: 'pending' },
+        ],
+      })
+      message.success(`Workflow #${wf.id} 已创建`)
+      setCreateWorkflowOpen(false)
+      setNewWorkflowName('')
+      setNewWorkflowDesc('')
+      loadIncidentWorkflows()
+    } catch (e: any) {
+      message.error('创建 Workflow 失败: ' + (e?.message || ''))
+    }
+  }
+
+  const handleWorkflowSubmit = async (wfId: number) => {
+    try {
+      await workflowApi.submit(wfId)
+      message.success('Workflow 已提交审批')
+      loadIncidentWorkflows()
+    } catch (e: any) {
+      message.error('提交失败: ' + (e?.message || ''))
+    }
+  }
+
+  const handleWorkflowApprove = async (wfId: number) => {
+    try {
+      await workflowApi.approve(wfId)
+      message.success('Workflow 已审批通过')
+      loadIncidentWorkflows()
+    } catch (e: any) {
+      if (e?.response?.status === 409) {
+        message.warning('状态已变更，正在刷新...')
+        loadIncidentWorkflows()
+      } else {
+        message.error('审批失败: ' + (e?.message || ''))
+      }
+    }
+  }
+
+  const handleWorkflowExecute = async (wfId: number) => {
+    try {
+      await workflowApi.execute(wfId)
+      message.success('Workflow 执行已启动')
+      loadIncidentWorkflows()
+      if (selectedWorkflowId === wfId) {
+        setSelectedWorkflowId(null)
+        setTimeout(() => setSelectedWorkflowId(wfId), 300)
+      }
+    } catch (e: any) {
+      if (e?.response?.status === 409) {
+        message.warning('状态已变更，正在刷新...')
+        loadIncidentWorkflows()
+      } else {
+        message.error('执行失败: ' + (e?.message || ''))
+      }
+    }
+  }
+
+  const getWorkflowVerification = (wf: Workflow) => {
+    const latestExec = workflowExecutions.find((e) => e.workflow_id === wf.id)
+    if (!latestExec?.step_executions) return null
+    const verifyStep = latestExec.step_executions.find(
+      (s) => s.step_type === 'verification' || s.action_type === 'verification'
+    )
+    if (!verifyStep) return null
+    return {
+      verified: verifyStep.status === 'success',
+      status: verifyStep.status,
+      message: verifyStep.result || verifyStep.error || '',
+    }
+  }
+
+  const canResolveFromWorkflow = () => {
+    if (!incident || incident.status === 'resolved' || incident.status === 'closed') return false
+    return incidentWorkflows.some((w) => {
+      if (w.status !== 'success') return false
+      const v = getWorkflowVerification(w)
+      // 安全策略：必须有真实 Verification 数据且 verified=true 才允许 Resolve
+      // 无 Verification Step / 未加载 Execution 时一律禁止 Resolve
+      return v ? v.verified === true : false
+    })
+  }
 
   const fetchDetail = useCallback(async () => {
     if (!id) return
@@ -560,38 +962,382 @@ export default function IncidentDetail({ id, open, onClose, onChanged }: Props) 
           risk: rec.risk,
         })
         message.success(`操作 #${action.id} 已创建，等待审批`)
+        loadIncidentActions()
       } catch (e: any) {
         message.error('创建操作失败: ' + (e?.message || ''))
       }
     }
 
-    return (
-      <Space direction="vertical" style={{ width: '100%' }} size="small">
-        {recs.map((rec) => (
-          <Card key={rec.key} size="small" title={
-            <Space>
-              <Tag color={priorityColor[rec.priority] || 'default'}>{rec.priority}</Tag>
-              <span>{rec.title}</span>
-              <Tag>来源: {rec.source}</Tag>
-              <Tag color={riskColor[rec.risk]}>风险: {rec.risk}</Tag>
-            </Space>
-          } extra={
-            <Button type="primary" size="small" onClick={() => handleCreateAction(rec)}>
-              创建操作
-            </Button>
-          }>
-            <div style={{ fontSize: 12, color: '#666' }}>{rec.description}</div>
-            {rec.reason && <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>原因: {rec.reason}</div>}
-            <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>
-              目标: {rec.target || rec.resource_name || '-'} | 类型: {rec.action_type}
+    const latestExecution = (actionId: number) => {
+      const execs = actionExecutions.filter((e) => e.action_id === actionId)
+      return execs.length > 0 ? execs[execs.length - 1] : null
+    }
+
+    const getActionVerification = (action: AutomationAction) => {
+      const exec = latestExecution(action.id)
+      return parseVerification(exec?.result_json)
+    }
+
+    const canResolve = () => {
+      if (!incident || incident.status === 'resolved' || incident.status === 'closed') return false
+      // Action Verification
+      const successActions = incidentActions.filter((a) => a.status === 'success')
+      const actionVerified = successActions.some((a) => {
+        const v = getActionVerification(a)
+        return v && v.verified === true
+      })
+      if (actionVerified) return true
+      // Workflow Verification
+      return canResolveFromWorkflow()
+    }
+
+    const renderActionRow = (action: AutomationAction) => {
+      const isSelected = selectedActionId === action.id
+      const verification = getActionVerification(action)
+      const exec = latestExecution(action.id)
+
+      return (
+        <div key={action.id} style={{ marginBottom: 8 }}>
+          <Card
+            size="small"
+            style={{ borderLeft: `3px solid ${isSelected ? '#1890ff' : '#e8e8e8'}` }}
+            onClick={() => setSelectedActionId(isSelected ? null : action.id)}
+            hoverable
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Space>
+                <Badge color={actionStatusColor[action.status] || 'default'} text={actionStatusLabel[action.status] || action.status} />
+                <Tag color="blue">#{action.id}</Tag>
+                <span style={{ fontWeight: 500 }}>{action.action_type}</span>
+                <Tag>{action.target_type}/{action.target_name}</Tag>
+                <Tag color={action.risk === 'high' || action.risk === 'critical' ? 'red' : action.risk === 'medium' ? 'orange' : 'green'}>
+                  风险: {action.risk}
+                </Tag>
+              </Space>
+              <Space>
+                {action.status === 'running' && <Spin size="small" />}
+                {action.status === 'pending_approval' && (
+                  <>
+                    <Button size="small" type="primary" onClick={(e) => { e.stopPropagation(); handleApprove(action.id) }}>审批</Button>
+                    <Button size="small" danger onClick={(e) => { e.stopPropagation(); handleReject(action.id) }}>拒绝</Button>
+                  </>
+                )}
+                {action.status === 'approved' && (
+                  <Button size="small" type="primary" danger onClick={(e) => { e.stopPropagation(); handleExecute(action.id) }}>执行</Button>
+                )}
+                {action.status === 'success' && verification && (
+                  verification.verified
+                    ? <Tag color="success">✓ 验证通过</Tag>
+                    : <Tag color="warning">⚠ 验证未通过</Tag>
+                )}
+                {action.status === 'failed' && exec?.error && (
+                  <Tag color="error">失败: {exec.error.slice(0, 30)}...</Tag>
+                )}
+              </Space>
+            </div>
+            {action.reason && <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>原因: {action.reason}</div>}
+            <div style={{ fontSize: 11, color: '#bbb', marginTop: 2 }}>
+              创建: {dayjs(action.created_at).format('MM-DD HH:mm:ss')}
+              {action.approved_at && ` · 审批: ${dayjs(action.approved_at).format('MM-DD HH:mm:ss')}`}
             </div>
           </Card>
-        ))}
+
+          {isSelected && (
+            <Card size="small" style={{ marginTop: 4, background: '#fafafa' }}>
+              <div style={{ fontWeight: 500, marginBottom: 8 }}>执行记录</div>
+              {executionsLoading ? (
+                <Spin />
+              ) : actionExecutions.filter((e) => e.action_id === action.id).length === 0 ? (
+                <Empty description="暂无执行记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+              ) : (
+                <Table
+                  size="small"
+                  pagination={false}
+                  dataSource={actionExecutions.filter((e) => e.action_id === action.id)}
+                  rowKey="id"
+                  columns={[
+                    { title: 'ID', dataIndex: 'id', width: 60 },
+                    { title: '执行器', dataIndex: 'executor', width: 120 },
+                    { title: '状态', dataIndex: 'status', width: 100, render: (s: string) => <Badge color={s === 'success' ? 'success' : s === 'failed' || s === 'timeout' ? 'error' : 'processing'} text={s} /> },
+                    { title: '开始时间', dataIndex: 'started_at', width: 150, render: (t: string) => dayjs(t).format('MM-DD HH:mm:ss') },
+                    { title: '耗时', dataIndex: 'duration_ms', width: 80, render: (ms: number) => ms ? `${(ms / 1000).toFixed(1)}s` : '-' },
+                    { title: '结果', dataIndex: 'result_json', render: (json: string) => {
+                      const v = parseVerification(json)
+                      if (v) return v.verified ? <Tag color="success">验证通过</Tag> : <Tag color="warning">验证未通过: {v.message}</Tag>
+                      return <span style={{ color: '#999' }}>-</span>
+                    }},
+                    { title: '错误', dataIndex: 'error', render: (e: string) => e ? <span style={{ color: '#ff4d4f', fontSize: 11 }}>{e.slice(0, 50)}</span> : '-' },
+                  ]}
+                />
+              )}
+            </Card>
+          )}
+        </div>
+      )
+    }
+
+    return (
+      <Space direction="vertical" style={{ width: '100%' }} size="small">
+        {/* 推荐操作 */}
+        {recs.length > 0 && (
+          <div>
+            <div style={{ fontWeight: 500, marginBottom: 8, color: '#666' }}>AI 推荐操作</div>
+            {recs.map((rec) => (
+              <Card key={rec.key} size="small" style={{ marginBottom: 8 }} title={
+                <Space>
+                  <Tag color={priorityColor[rec.priority] || 'default'}>{rec.priority}</Tag>
+                  <span>{rec.title}</span>
+                  <Tag>来源: {rec.source}</Tag>
+                  <Tag color={riskColor[rec.risk]}>风险: {rec.risk}</Tag>
+                </Space>
+              } extra={
+                <Button type="primary" size="small" onClick={() => handleCreateAction(rec)}>
+                  创建操作
+                </Button>
+              }>
+                <div style={{ fontSize: 12, color: '#666' }}>{rec.description}</div>
+                {rec.reason && <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>原因: {rec.reason}</div>}
+                <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>
+                  目标: {rec.target || rec.resource_name || '-'} | 类型: {rec.action_type}
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
+
+        {/* 关联操作列表 - P0-PRODUCT-02 */}
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ fontWeight: 500, color: '#666' }}>
+              关联操作 ({incidentActions.length})
+              {hasRunningAction && <Spin size="small" style={{ marginLeft: 8 }} />}
+            </span>
+            <Button size="small" onClick={loadIncidentActions}>刷新</Button>
+          </div>
+          {actionsLoading && incidentActions.length === 0 ? (
+            <Spin />
+          ) : incidentActions.length === 0 ? (
+            <Empty description="暂无关联操作" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          ) : (
+            incidentActions.map(renderActionRow)
+          )}
+        </div>
+
+        {/* P0-PRODUCT-03: 关联 Workflow 区域 */}
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, marginTop: 16 }}>
+            <span style={{ fontWeight: 500, color: '#666' }}>
+              编排 Workflow ({incidentWorkflows.length})
+              {hasRunningWorkflow && <Spin size="small" style={{ marginLeft: 8 }} />}
+            </span>
+            <Space>
+              <Button size="small" onClick={loadIncidentWorkflows}>刷新</Button>
+              <Button size="small" type="primary" onClick={() => setCreateWorkflowOpen(true)}>创建 Workflow</Button>
+            </Space>
+          </div>
+          {workflowsLoading && incidentWorkflows.length === 0 ? (
+            <Spin />
+          ) : incidentWorkflows.length === 0 ? (
+            <Empty description="暂无关联 Workflow，可创建多步骤编排处置流程" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          ) : (
+            incidentWorkflows.map((wf) => {
+              const isWfSelected = selectedWorkflowId === wf.id
+              const wfVerification = getWorkflowVerification(wf)
+              const steps = wf.steps || []
+              const completedSteps = steps.filter((s) => s.status === 'success').length
+              const currentStep = steps.find((s) => s.status === 'running') || steps.find((s) => s.status === 'pending')
+              return (
+                <div key={wf.id} style={{ marginBottom: 8 }}>
+                  <Card
+                    size="small"
+                    style={{ borderLeft: `3px solid ${isWfSelected ? '#1890ff' : '#e8e8e8'}` }}
+                    onClick={() => setSelectedWorkflowId(isWfSelected ? null : wf.id)}
+                    hoverable
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Space>
+                        <Badge color={workflowStatusColor[wf.status] || 'default'} text={workflowStatusLabel[wf.status] || wf.status} />
+                        <Tag color="purple">#{wf.id}</Tag>
+                        <span style={{ fontWeight: 500 }}>{wf.name}</span>
+                        <Tag>{steps.length} 步骤</Tag>
+                        {wf.status === 'running' && currentStep && (
+                          <Tag color="cyan">当前: {currentStep.name}</Tag>
+                        )}
+                        {wf.status === 'success' && (
+                          wfVerification?.verified
+                            ? <Tag color="success">✓ 验证通过</Tag>
+                            : <Tag color="warning">⚠ 验证未通过</Tag>
+                        )}
+                      </Space>
+                      <Space>
+                        {wf.status === 'draft' && (
+                          <Button size="small" type="primary" onClick={(e) => { e.stopPropagation(); handleWorkflowSubmit(wf.id) }}>提交审批</Button>
+                        )}
+                        {wf.status === 'pending_approval' && (
+                          <Button size="small" type="primary" onClick={(e) => { e.stopPropagation(); handleWorkflowApprove(wf.id) }}>审批</Button>
+                        )}
+                        {wf.status === 'approved' && (
+                          <Button size="small" type="primary" danger onClick={(e) => { e.stopPropagation(); handleWorkflowExecute(wf.id) }}>执行</Button>
+                        )}
+                        {wf.status === 'running' && <Spin size="small" />}
+                      </Space>
+                    </div>
+                    {wf.description && <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>{wf.description}</div>}
+                    <div style={{ fontSize: 11, color: '#bbb', marginTop: 2 }}>
+                      创建: {dayjs(wf.created_at).format('MM-DD HH:mm:ss')}
+                      {wf.approved_at && ` · 审批: ${dayjs(wf.approved_at).format('MM-DD HH:mm:ss')}`}
+                      {wf.started_at && ` · 开始: ${dayjs(wf.started_at).format('MM-DD HH:mm:ss')}`}
+                      {wf.finished_at && ` · 完成: ${dayjs(wf.finished_at).format('MM-DD HH:mm:ss')}`}
+                      {wf.duration_ms && ` · 耗时: ${(wf.duration_ms / 1000).toFixed(1)}s`}
+                    </div>
+                    {/* 步骤进度条 */}
+                    {steps.length > 0 && (
+                      <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <span style={{ fontSize: 11, color: '#999' }}>进度:</span>
+                        <div style={{ flex: 1, height: 6, background: '#f0f0f0', borderRadius: 3, overflow: 'hidden' }}>
+                          <div
+                            style={{
+                              height: '100%',
+                              width: `${(completedSteps / steps.length) * 100}%`,
+                              background: wf.status === 'failed' ? '#ff4d4f' : '#52c41a',
+                              transition: 'width 0.3s',
+                            }}
+                          />
+                        </div>
+                        <span style={{ fontSize: 11, color: '#666' }}>{completedSteps}/{steps.length}</span>
+                      </div>
+                    )}
+                  </Card>
+
+                  {/* Workflow Execution 详情 */}
+                  {isWfSelected && (
+                    <Card size="small" style={{ marginTop: 4, background: '#fafafa' }}>
+                      <div style={{ fontWeight: 500, marginBottom: 8 }}>执行记录</div>
+                      {workflowExecLoading ? (
+                        <Spin />
+                      ) : workflowExecutions.filter((e) => e.workflow_id === wf.id).length === 0 ? (
+                        <Empty description="暂无执行记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                      ) : (
+                        workflowExecutions.filter((e) => e.workflow_id === wf.id).map((exec) => (
+                          <div key={exec.id} style={{ marginBottom: 12 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                              <Space>
+                                <Badge color={execStatusColor[exec.status] || 'default'} text={exec.status} />
+                                <span style={{ fontSize: 12 }}>Execution #{exec.id}</span>
+                                {exec.trigger_type && <Tag>{exec.trigger_type}</Tag>}
+                              </Space>
+                              <span style={{ fontSize: 11, color: '#999' }}>
+                                {exec.started_at && dayjs(exec.started_at).format('MM-DD HH:mm:ss')}
+                                {exec.duration_ms && ` · ${(exec.duration_ms / 1000).toFixed(1)}s`}
+                              </span>
+                            </div>
+                            {/* Step Executions */}
+                            {exec.step_executions && exec.step_executions.length > 0 && (
+                              <Timeline
+                                items={exec.step_executions.map((se) => ({
+                                  color: se.status === 'success' ? 'green' : se.status === 'failed' ? 'red' : se.status === 'running' ? 'blue' : 'gray',
+                                  children: (
+                                    <div>
+                                      <div style={{ fontSize: 12, fontWeight: 500 }}>
+                                        {se.step_name}
+                                        <Tag style={{ marginLeft: 8 }}>{stepTypeLabel[se.step_type] || se.step_type}</Tag>
+                                        {se.attempt > 1 && <Tag color="orange">重试 #{se.attempt}</Tag>}
+                                      </div>
+                                      <div style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
+                                        状态: {se.status}
+                                        {se.started_at && ` · 开始: ${dayjs(se.started_at).format('HH:mm:ss')}`}
+                                        {se.finished_at && ` · 完成: ${dayjs(se.finished_at).format('HH:mm:ss')}`}
+                                        {se.duration_ms && ` · ${(se.duration_ms / 1000).toFixed(1)}s`}
+                                      </div>
+                                      {se.result && <div style={{ fontSize: 11, color: '#52c41a', marginTop: 2 }}>结果: {typeof se.result === 'string' ? se.result.slice(0, 100) : JSON.stringify(se.result).slice(0, 100)}</div>}
+                                      {se.error && <div style={{ fontSize: 11, color: '#ff4d4f', marginTop: 2 }}>错误: {se.error.slice(0, 100)}</div>}
+                                    </div>
+                                  ),
+                                }))}
+                              />
+                            )}
+                            {exec.error && (
+                              <Alert type="error" showIcon message="执行错误" description={exec.error} style={{ marginTop: 4 }} />
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </Card>
+                  )}
+                </div>
+              )
+            })
+          )}
+        </div>
+
+        {/* 创建 Workflow Modal */}
+        <Modal
+          title="创建编排 Workflow"
+          open={createWorkflowOpen}
+          onCancel={() => setCreateWorkflowOpen(false)}
+          onOk={handleCreateWorkflow}
+          okText="创建"
+          cancelText="取消"
+        >
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ marginBottom: 4, fontSize: 13 }}>Workflow 名称 *</div>
+            <input
+              style={{ width: '100%', padding: '6px 8px', border: '1px solid #d9d9d9', borderRadius: 4 }}
+              placeholder="例如: Pod 恢复编排流程"
+              value={newWorkflowName}
+              onChange={(e) => setNewWorkflowName(e.target.value)}
+            />
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ marginBottom: 4, fontSize: 13 }}>描述</div>
+            <textarea
+              style={{ width: '100%', padding: '6px 8px', border: '1px solid #d9d9d9', borderRadius: 4, minHeight: 60 }}
+              placeholder="可选"
+              value={newWorkflowDesc}
+              onChange={(e) => setNewWorkflowDesc(e.target.value)}
+            />
+          </div>
+          <Alert
+            type="info"
+            showIcon
+            message="默认步骤"
+            description="将自动创建 4 个步骤：系统观察 → 故障调查 → 自动化处置 → 结果验证。可在 Workflow 页面编辑步骤详情。"
+          />
+        </Modal>
+
+        {/* 验证通过后一键解决 */}
+        {canResolve() && (
+          <Alert
+            type="success"
+            showIcon
+            message="操作执行成功且验证通过"
+            description="所有关联操作均已执行成功并通过验证，可以将此事件标记为已解决。"
+            action={
+              <Button type="primary" size="small" onClick={handleResolveIncident}>
+                标记事件已解决
+              </Button>
+            }
+          />
+        )}
+
+        {/* 执行成功但验证未通过 */}
+        {incidentActions.some((a) => a.status === 'success') && !canResolve() && incidentActions.some((a) => {
+          const v = getActionVerification(a)
+          return v && v.verified === false
+        }) && (
+          <Alert
+            type="warning"
+            showIcon
+            message="操作执行成功，但验证未通过"
+            description="操作已执行，但验证结果表明问题可能尚未解决。请检查执行详情和验证信息。"
+          />
+        )}
+
         <Alert
           type="info"
           showIcon
           message="安全说明"
-          description="所有操作必须经过人工审批后才能执行。AI/RCA 仅提供建议，不会自动执行。"
+          description="所有操作必须经过人工审批后才能执行。AI/RCA 仅提供建议，不会自动执行。执行成功后需通过验证才能标记事件已解决。"
         />
       </Space>
     )

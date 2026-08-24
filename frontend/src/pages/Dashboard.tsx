@@ -1,20 +1,12 @@
-import { useEffect, useState, useCallback } from 'react'
-import { Row, Col, Typography, Space, Tag, Spin, Table, Button, Select, Progress, Empty } from 'antd'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import {
-  CloudOutlined,
-  NodeIndexOutlined,
-  AppstoreOutlined,
-  AlertOutlined,
-  WarningOutlined,
-  ThunderboltOutlined,
-  FireOutlined,
-  CheckCircleOutlined,
-  ReloadOutlined,
-  ClockCircleOutlined,
-  RocketOutlined,
-  HeartOutlined,
-  ArrowUpOutlined,
-  ArrowDownOutlined,
+  Row, Col, Typography, Space, Tag, Spin, Table, Button, Progress, Empty, Alert, Card, Badge, Tooltip, Statistic,
+} from 'antd'
+import {
+  ReloadOutlined, WarningOutlined, CheckCircleOutlined, ClockCircleOutlined,
+  ThunderboltOutlined, FireOutlined, AlertOutlined, AppstoreOutlined,
+  NodeIndexOutlined, CloudOutlined, HeartOutlined, RocketOutlined,
+  ExclamationCircleOutlined, PlayCircleOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import ReactECharts from 'echarts-for-react'
@@ -23,32 +15,146 @@ import { k8sApi } from '@/api/kubernetes'
 import { alertsApi } from '@/api/alerts'
 import { metricsApi } from '@/api/metrics'
 import { anomalyApi } from '@/api/anomaly'
-import type { Cluster, Node, Pod, Alert as AlertType, PageResult } from '@/types'
+import { incidentApi } from '@/api/incident'
+import { automationApi } from '@/api/automation'
+import type { AutomationAction, ActionExecution } from '@/api/automation'
+import { workflowApi } from '@/api/workflow'
+import type { Workflow } from '@/api/workflow'
+import IncidentDetail from '@/pages/AIOps/IncidentDetail'
+import type {
+  Cluster, Node, Pod, Alert as AlertType, PageResult,
+  Incident,
+} from '@/types'
 import dayjs from 'dayjs'
 
 const { Title, Text } = Typography
 
+// Severity 排序权重
+const severityWeight: Record<string, number> = { critical: 3, warning: 2, info: 1 }
+const severityColor: Record<string, string> = {
+  critical: '#dc2626', warning: '#d97706', info: '#2563eb',
+}
+const severityLabel: Record<string, string> = {
+  critical: '严重', warning: '警告', info: '信息',
+}
+const statusColor: Record<string, string> = {
+  open: '#dc2626', acknowledged: '#d97706', resolved: '#16a34a', closed: '#6b7280',
+}
+const statusLabel: Record<string, string> = {
+  open: '待处理', acknowledged: '已确认', resolved: '已解决', closed: '已关闭',
+}
+
+// Action 状态颜色
+const actionStatusColor: Record<string, string> = {
+  proposed: 'default', pending_approval: 'warning', approved: 'blue',
+  rejected: 'default', running: 'processing', success: 'success',
+  failed: 'error', timeout: 'error', cancelled: 'default',
+}
+
+// Workflow 状态颜色
+const workflowStatusColor: Record<string, string> = {
+  draft: 'default', pending_approval: 'warning', approved: 'blue',
+  running: 'processing', success: 'success', failed: 'error',
+  cancelled: 'default', timeout: 'error',
+}
+
 export default function Dashboard() {
   const navigate = useNavigate()
+  const refreshTokenRef = useRef(0)
+  const pollingRef = useRef<number | null>(null)
+
+  // === Operations Data ===
+  const [incidents, setIncidents] = useState<Incident[]>([])
+  const [incidentsLoading, setIncidentsLoading] = useState(false)
+  const [incidentsError, setIncidentsError] = useState('')
+
+  const [actions, setActions] = useState<AutomationAction[]>([])
+  const [actionsLoading, setActionsLoading] = useState(false)
+  const [actionExecutions, setActionExecutions] = useState<ActionExecution[]>([])
+
+  const [workflows, setWorkflows] = useState<Workflow[]>([])
+  const [workflowsLoading, setWorkflowsLoading] = useState(false)
+
+  // === Infrastructure Data (保留现有) ===
   const [clusters, setClusters] = useState<Cluster[]>([])
   const [nodes, setNodes] = useState<Node[]>([])
   const [pods, setPods] = useState<Pod[]>([])
   const [alerts, setAlerts] = useState<PageResult<AlertType> | null>(null)
   const [activeAnomalyCount, setActiveAnomalyCount] = useState(0)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string>('')
+  const [infraLoading, setInfraLoading] = useState(false)
   const [timeRange, setTimeRange] = useState('1h')
   const [cpuSeries, setCpuSeries] = useState<any[]>([])
   const [memSeries, setMemSeries] = useState<any[]>([])
   const [metricsError, setMetricsError] = useState('')
 
-  const fetchData = useCallback(async () => {
-    setLoading(true)
-    setError('')
+  // === UI State ===
+  const [lastUpdated, setLastUpdated] = useState<dayjs.Dayjs | null>(null)
+  const [selectedIncidentId, setSelectedIncidentId] = useState<number | null>(null)
+  const [incidentDetailOpen, setIncidentDetailOpen] = useState(false)
+  const [showInfra, setShowInfra] = useState(true)
+
+  // === 解析 Verification ===
+  const parseVerification = (resultJson?: string) => {
+    if (!resultJson) return null
+    try {
+      const parsed = JSON.parse(resultJson)
+      return parsed?.data?.verification || parsed?.verification || null
+    } catch {
+      return null
+    }
+  }
+
+  // === 加载 Operations 数据 ===
+  const loadOperationsData = useCallback(async () => {
+    const token = ++refreshTokenRef.current
+    setIncidentsLoading(true)
+    setIncidentsError('')
+    setActionsLoading(true)
+    setWorkflowsLoading(true)
+
+    // 独立请求，互不影响
+    const incidentPromise = incidentApi.list({ page: 1, page_size: 200 })
+      .then((res) => { if (token === refreshTokenRef.current) setIncidents(res.items || []) })
+      .catch((err) => { if (token === refreshTokenRef.current) setIncidentsError(err?.message || 'Incident 加载失败') })
+      .finally(() => { if (token === refreshTokenRef.current) setIncidentsLoading(false) })
+
+    const actionPromise = automationApi.list({ page: 1, page_size: 100 })
+      .then(async (res) => {
+        if (token !== refreshTokenRef.current) return
+        const actionList = res.items || []
+        setActions(actionList)
+        // 对 success Action 加载 executions 获取 Verification（限制数量）
+        const successActions = actionList.filter((a) => a.status === 'success').slice(0, 20)
+        const execResults = await Promise.allSettled(
+          successActions.map((a) => automationApi.executions(a.id).catch(() => [] as ActionExecution[]))
+        )
+        if (token !== refreshTokenRef.current) return
+        const allExecs: ActionExecution[] = []
+        execResults.forEach((r) => {
+          if (r.status === 'fulfilled' && Array.isArray(r.value)) {
+            allExecs.push(...r.value)
+          }
+        })
+        setActionExecutions(allExecs)
+      })
+      .catch(() => {})
+      .finally(() => { if (token === refreshTokenRef.current) setActionsLoading(false) })
+
+    const workflowPromise = workflowApi.list({ page: 1, page_size: 100 })
+      .then((res) => { if (token === refreshTokenRef.current) setWorkflows(res.items || []) })
+      .catch(() => {})
+      .finally(() => { if (token === refreshTokenRef.current) setWorkflowsLoading(false) })
+
+    await Promise.allSettled([incidentPromise, actionPromise, workflowPromise])
+    if (token === refreshTokenRef.current) setLastUpdated(dayjs())
+  }, [])
+
+  // === 加载 Infrastructure 数据（保留现有逻辑） ===
+  const loadInfraData = useCallback(async () => {
+    setInfraLoading(true)
     try {
       const clusterList = await clusterApi.list()
       setClusters(clusterList || [])
-
       if (clusterList && clusterList.length > 0) {
         const firstCluster = clusterList[0].name
         const [nodeList, podList, alertData, anomalyData] = await Promise.all([
@@ -61,30 +167,21 @@ export default function Dashboard() {
         setPods(podList || [])
         setAlerts(alertData)
         setActiveAnomalyCount(anomalyData?.count || 0)
-      } else {
-        setNodes([])
-        setPods([])
-        setAlerts({ items: [], total: 0, page: 1, page_size: 100 })
-        setActiveAnomalyCount(0)
       }
-    } catch (err: any) {
-      setError(err?.message || '数据加载失败')
+    } catch {
+      // ignore
     } finally {
-      setLoading(false)
+      setInfraLoading(false)
     }
   }, [])
 
-  useEffect(() => {
-    fetchData()
-  }, [fetchData])
-
-  const fetchMetrics = useCallback(async () => {
+  // === 加载 Metrics ===
+  const loadMetrics = useCallback(async () => {
     if (clusters.length === 0) return
     setMetricsError('')
     const seconds = timeRange === '1h' ? 3600 : timeRange === '6h' ? 21600 : 86400
     const end = Math.floor(Date.now() / 1000)
     const start = end - seconds
-    // 后端要求 RFC3339 格式时间和 duration 格式 step
     const startStr = new Date(start * 1000).toISOString()
     const endStr = new Date(end * 1000).toISOString()
     try {
@@ -99,260 +196,454 @@ export default function Dashboard() {
     }
   }, [clusters, timeRange])
 
+  // === 初始加载 + 30s 轮询 ===
   useEffect(() => {
-    fetchMetrics()
-  }, [fetchMetrics])
+    loadOperationsData()
+    loadInfraData()
+    pollingRef.current = window.setInterval(() => {
+      loadOperationsData()
+    }, 30000)
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current)
+    }
+  }, [loadOperationsData, loadInfraData])
 
-  // 计算派生指标
+  useEffect(() => {
+    loadMetrics()
+  }, [loadMetrics])
+
+  const handleRefresh = () => {
+    loadOperationsData()
+    loadInfraData()
+  }
+
+  // === 派生指标 ===
+  const activeIncidents = incidents.filter((i) => i.status === 'open' || i.status === 'acknowledged')
+  const criticalIncidents = activeIncidents.filter((i) => i.severity === 'critical')
+  const warningIncidents = activeIncidents.filter((i) => i.severity === 'warning')
+  const infoIncidents = activeIncidents.filter((i) => i.severity === 'info')
+  const openIncidents = activeIncidents.filter((i) => i.status === 'open')
+  const acknowledgedIncidents = activeIncidents.filter((i) => i.status === 'acknowledged')
+
+  // New Today
+  const today = dayjs().startOf('day')
+  const newToday = incidents.filter((i) => dayjs(i.created_at).isAfter(today))
+
+  // Resolved Today + MTTR（基于 end_time，如果可靠）
+  const resolvedIncidents = incidents.filter((i) => (i.status === 'resolved' || i.status === 'closed') && i.end_time)
+  const resolvedToday = resolvedIncidents.filter((i) => dayjs(i.end_time).isAfter(today))
+  const hasReliableResolutionTime = resolvedIncidents.length > 0 && resolvedIncidents.every((i) => i.start_time && i.end_time)
+  const mttrMinutes = hasReliableResolutionTime
+    ? resolvedIncidents.reduce((sum, i) => sum + dayjs(i.end_time).diff(dayjs(i.start_time), 'minute'), 0) / resolvedIncidents.length
+    : null
+
+  // Priority Incidents: 按 severity + duration 排序，Top 10
+  const priorityIncidents = [...activeIncidents].sort((a, b) => {
+    const sw = severityWeight[b.severity] - severityWeight[a.severity]
+    if (sw !== 0) return sw
+    return dayjs(a.start_time).valueOf() - dayjs(b.start_time).valueOf()
+  }).slice(0, 10)
+
+  // Action 统计
+  const runningActions = actions.filter((a) => a.status === 'running')
+  const failedActions = actions.filter((a) => a.status === 'failed' || a.status === 'timeout')
+  const successActions = actions.filter((a) => a.status === 'success')
+  const pendingActions = actions.filter((a) => a.status === 'pending_approval' || a.status === 'approved')
+
+  // Verification Failed（来自真实 Execution result_json）
+  const verificationFailed = actionExecutions.filter((e) => {
+    const v = parseVerification(e.result_json)
+    return v && v.verified === false
+  })
+
+  // Workflow 统计
+  const runningWorkflows = workflows.filter((w) => w.status === 'running')
+  const failedWorkflows = workflows.filter((w) => w.status === 'failed' || w.status === 'timeout')
+  const successWorkflows = workflows.filter((w) => w.status === 'success')
+  const pendingWorkflows = workflows.filter((w) => w.status === 'pending_approval' || w.status === 'approved')
+
+  // Affected Services / Namespaces
+  const serviceCount: Record<string, number> = {}
+  const namespaceCount: Record<string, number> = {}
+  activeIncidents.forEach((i) => {
+    if (i.service) serviceCount[i.service] = (serviceCount[i.service] || 0) + 1
+    if (i.namespace) namespaceCount[i.namespace] = (namespaceCount[i.namespace] || 0) + 1
+  })
+  const topServices = Object.entries(serviceCount).sort((a, b) => b[1] - a[1]).slice(0, 8)
+  const topNamespaces = Object.entries(namespaceCount).sort((a, b) => b[1] - a[1]).slice(0, 8)
+
+  // 获取 Incident 关联的 Action 状态（用于 Priority List）
+  const getIncidentActions = (incidentId: number) => actions.filter((a) => a.incident_id === incidentId)
+  const getIncidentActionStatus = (incidentId: number) => {
+    const ia = getIncidentActions(incidentId)
+    if (ia.some((a) => a.status === 'running')) return { text: '执行中', color: 'processing' }
+    if (ia.some((a) => a.status === 'failed' || a.status === 'timeout')) return { text: '执行失败', color: 'error' }
+    if (ia.some((a) => a.status === 'success')) {
+      // 检查 Verification
+      const successAction = ia.find((a) => a.status === 'success')
+      if (successAction) {
+        const exec = actionExecutions.find((e) => e.action_id === successAction.id)
+        const v = parseVerification(exec?.result_json)
+        if (v && v.verified === true) return { text: '已验证', color: 'success' }
+        if (v && v.verified === false) return { text: '验证失败', color: 'error' }
+      }
+      return { text: '执行成功', color: 'success' }
+    }
+    if (ia.some((a) => a.status === 'pending_approval')) return { text: '待审批', color: 'warning' }
+    if (ia.length > 0) return { text: '已创建', color: 'default' }
+    return { text: '-', color: 'default' }
+  }
+
+  // RCA 状态（基于 Incident.root_cause + confidence）
+  const getRcaStatus = (incident: Incident) => {
+    if (incident.root_cause && incident.confidence && incident.confidence > 0) {
+      return { text: `RCA ${Math.round(incident.confidence * 100)}%`, color: 'success' }
+    }
+    return { text: '-', color: 'default' }
+  }
+
+  // Duration 显示
+  const formatDuration = (startTime: string) => {
+    const diff = dayjs().diff(dayjs(startTime), 'minute')
+    if (diff < 60) return `${diff}m`
+    if (diff < 1440) return `${Math.floor(diff / 60)}h ${diff % 60}m`
+    return `${Math.floor(diff / 1440)}d ${Math.floor((diff % 1440) / 60)}h`
+  }
+
+  // === Infrastructure 派生指标（保留现有） ===
   const runningPods = pods.filter((p) => p.status === 'Running').length
   const failedPods = pods.filter((p) => p.status === 'Failed' || p.status === 'CrashLoopBackOff' || p.status === 'Error').length
   const firingCount = alerts?.total || 0
   const criticalAlerts = alerts?.items?.filter((a) => a.severity === 'critical') || []
-  const warningAlerts = alerts?.items?.filter((a) => a.severity === 'warning') || []
-  const abnormalPods = pods.filter((p) => p.status !== 'Running' && p.status !== 'Succeeded' && p.status !== 'Completed')
-
-  // System Health: 基于 Pod running 比例 + 无 critical alert
   const totalPods = pods.length || 1
   const podHealthRatio = (runningPods / totalPods) * 100
-  const alertPenalty = criticalAlerts.length > 0 ? 10 : warningAlerts.length > 0 ? 5 : 0
+  const alertPenalty = criticalAlerts.length > 0 ? 10 : 0
   const systemHealth = Math.max(0, Math.min(100, podHealthRatio - alertPenalty))
-  const healthStatus = systemHealth >= 95 ? 'healthy' : systemHealth >= 80 ? 'warning' : 'critical'
-  const healthColor = healthStatus === 'healthy' ? '#16a34a' : healthStatus === 'warning' ? '#d97706' : '#dc2626'
+  const healthColor = systemHealth >= 95 ? '#16a34a' : systemHealth >= 80 ? '#d97706' : '#dc2626'
 
-  const podColumns = [
-    { title: '容器', dataIndex: 'name', key: 'name', render: (t: string) => <Text strong style={{ fontSize: 13 }}>{t}</Text> },
-    { title: '命名空间', dataIndex: 'namespace', key: 'namespace', render: (v: string) => v || '-' },
-    { title: '状态', dataIndex: 'status', key: 'status', render: (s: string) => (
-      <span className={`status-badge ${s === 'Running' ? 'success' : s === 'Failed' ? 'danger' : 'warning'}`}>{s || '未知'}</span>
-    )},
-    { title: '重启次数', dataIndex: 'restart_count', key: 'restart_count', render: (v: number) => v || 0 },
-  ]
-
-  const alertColumns = [
-    { title: '告警名称', dataIndex: 'alertname', key: 'alertname', render: (t: string) => <Text strong style={{ fontSize: 13 }}>{t}</Text> },
-    { title: '级别', dataIndex: 'severity', key: 'severity', render: (s: string) => (
-      <span className={`status-badge ${s === 'critical' ? 'critical' : s === 'warning' ? 'warning' : 'info'}`}>{s}</span>
-    )},
-    { title: '服务', dataIndex: 'service', key: 'service', render: (v: string) => v || '-' },
-  ]
-
+  // CPU/Memory 图表配置
   const chartOption = {
     tooltip: { trigger: 'axis', backgroundColor: '#fff', borderColor: '#e5e7eb', textStyle: { color: '#111827', fontSize: 12 } },
-    legend: { data: ['CPU', '内存'], bottom: 0, textStyle: { fontSize: 12, color: '#6b7280' }, itemWidth: 12, itemHeight: 8 },
-    grid: { left: 45, right: 16, top: 16, bottom: 36 },
-    xAxis: { type: 'time', axisLabel: { fontSize: 11, color: '#9ca3af' }, axisLine: { lineStyle: { color: '#e5e7eb' } } },
-    yAxis: { type: 'value', axisLabel: { formatter: '{value}%', fontSize: 11, color: '#9ca3af' }, max: 100, splitLine: { lineStyle: { color: '#f3f4f6' } } },
+    legend: { data: ['CPU %', 'Memory %'], textStyle: { color: '#6b7280', fontSize: 11 }, top: 0 },
+    grid: { left: 40, right: 16, top: 28, bottom: 24 },
+    xAxis: { type: 'category', data: cpuSeries.map((p) => dayjs(p[0] * 1000).format('HH:mm')), axisLine: { lineStyle: { color: '#e5e7eb' } }, axisLabel: { color: '#6b7280', fontSize: 10 } },
+    yAxis: { type: 'value', max: 100, axisLine: { show: false }, splitLine: { lineStyle: { color: '#f3f4f6' } }, axisLabel: { color: '#6b7280', fontSize: 10, formatter: '{value}%' } },
     series: [
-      {
-        name: 'CPU',
-        type: 'line',
-        smooth: true,
-        showSymbol: false,
-        data: cpuSeries.map((v: any) => [v[0] * 1000, parseFloat(v[1]).toFixed(1)]),
-        lineStyle: { color: '#2563eb', width: 2 },
-        areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(37,99,235,0.15)' }, { offset: 1, color: 'rgba(37,99,235,0.01)' }] } },
-      },
-      {
-        name: 'Memory',
-        type: 'line',
-        smooth: true,
-        showSymbol: false,
-        data: memSeries.map((v: any) => [v[0] * 1000, parseFloat(v[1]).toFixed(1)]),
-        lineStyle: { color: '#7c3aed', width: 2 },
-        areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(124,58,237,0.12)' }, { offset: 1, color: 'rgba(124,58,237,0.01)' }] } },
-      },
+      { name: 'CPU %', type: 'line', smooth: true, data: cpuSeries.map((p) => parseFloat(p[1]).toFixed(1)), lineStyle: { color: '#3b82f6', width: 2 }, areaStyle: { color: 'rgba(59,130,246,0.1)' }, showSymbol: false },
+      { name: 'Memory %', type: 'line', smooth: true, data: memSeries.map((p) => parseFloat(p[1]).toFixed(1)), lineStyle: { color: '#8b5cf6', width: 2 }, areaStyle: { color: 'rgba(139,92,246,0.1)' }, showSymbol: false },
     ],
   }
 
+  // Priority Incident 表格列
+  const priorityColumns = [
+    {
+      title: '严重度', dataIndex: 'severity', width: 80,
+      render: (v: string) => <Tag color={severityColor[v]} style={{ margin: 0 }}>{severityLabel[v] || v}</Tag>,
+    },
+    {
+      title: '事件', dataIndex: 'title', width: 200, ellipsis: true,
+      render: (v: string, record: Incident) => (
+        <a onClick={() => { setSelectedIncidentId(record.id); setIncidentDetailOpen(true) }} style={{ color: '#111827' }}>
+          {v}
+        </a>
+      ),
+    },
+    {
+      title: '状态', dataIndex: 'status', width: 80,
+      render: (v: string) => <Badge color={statusColor[v]} text={statusLabel[v] || v} />,
+    },
+    {
+      title: '服务', dataIndex: 'service', width: 120, ellipsis: true,
+      render: (v: string) => v || <Text type="secondary">-</Text>,
+    },
+    {
+      title: '集群/命名空间', width: 140, ellipsis: true,
+      render: (_: any, record: Incident) => (
+        <Text type="secondary" style={{ fontSize: 12 }}>{record.cluster || '-'} / {record.namespace || '-'}</Text>
+      ),
+    },
+    {
+      title: '持续时间', dataIndex: 'start_time', width: 90,
+      render: (v: string) => <Text strong>{formatDuration(v)}</Text>,
+    },
+    {
+      title: 'RCA', width: 90,
+      render: (_: any, record: Incident) => {
+        const r = getRcaStatus(record)
+        return <Tag color={r.color} style={{ margin: 0 }}>{r.text}</Tag>
+      },
+    },
+    {
+      title: '自动化', width: 90,
+      render: (_: any, record: Incident) => {
+        const s = getIncidentActionStatus(record.id)
+        return <Tag color={s.color} style={{ margin: 0 }}>{s.text}</Tag>
+      },
+    },
+  ]
+
   return (
-    <div className="aiops-page">
-      {/* Page Header */}
-      <div className="aiops-page-header">
+    <div style={{ padding: '16px 24px', maxWidth: '100%' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div>
-          <div className="aiops-page-title">运维总览</div>
-          <div className="aiops-page-subtitle">
-            {dayjs().format('YYYY-MM-DD HH:mm')} · {clusters.length} 集群 · {nodes.length} 节点
-          </div>
+          <Title level={4} style={{ margin: 0 }}>
+            <ThunderboltOutlined style={{ color: '#3b82f6', marginRight: 8 }} />
+            Operations Command Center
+          </Title>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            当前系统运维态势 {lastUpdated && `· 最后更新 ${lastUpdated.format('HH:mm:ss')}`}
+          </Text>
         </div>
-        <Space>
-          <Select
-            value={timeRange}
-            onChange={setTimeRange}
-            size="middle"
-            style={{ width: 110 }}
-            options={[
-              { label: '最近 1 小时', value: '1h' },
-              { label: '最近 6 小时', value: '6h' },
-              { label: '最近 24 小时', value: '24h' },
-            ]}
-          />
-          <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>刷新</Button>
-        </Space>
+        <Button icon={<ReloadOutlined />} onClick={handleRefresh} loading={incidentsLoading || actionsLoading}>
+          刷新
+        </Button>
       </div>
 
-      {/* KPI Row — Compact */}
-      <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+      {/* KPI Row 1 */}
+      <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
         <Col xs={12} sm={12} md={6}>
-          <div className={`kpi-card accent-${healthStatus}`} onClick={() => navigate('/kubernetes/nodes')} style={{ cursor: 'pointer' }}>
-            <HeartOutlined className="kpi-icon" style={{ color: healthColor }} />
-            <div className="kpi-label"><HeartOutlined style={{ fontSize: 11 }} /> 系统健康度</div>
-            <div>
-              <div className="kpi-value" style={{ color: healthColor, fontSize: 28 }}>{systemHealth.toFixed(1)}%</div>
-              <div className="kpi-sub" style={{ color: healthColor }}>
-                {healthStatus === 'healthy' ? '所有系统运行正常' : healthStatus === 'warning' ? '检测到轻微问题' : '存在严重问题需关注'}
-              </div>
+          <Card size="small" style={{ borderLeft: `3px solid ${criticalIncidents.length > 0 ? '#dc2626' : '#16a34a'}` }}>
+            <Statistic
+              title={<span><AlertOutlined style={{ marginRight: 4 }} />活跃事件</span>}
+              value={activeIncidents.length}
+              valueStyle={{ fontSize: 28, color: criticalIncidents.length > 0 ? '#dc2626' : '#111827' }}
+            />
+            <div style={{ marginTop: 4, fontSize: 11 }}>
+              <Tag color="red" style={{ margin: 0, fontSize: 10 }}>严重 {criticalIncidents.length}</Tag>
+              <Tag color="orange" style={{ margin: '0 4px', fontSize: 10 }}>警告 {warningIncidents.length}</Tag>
+              <Tag color="blue" style={{ margin: 0, fontSize: 10 }}>信息 {infoIncidents.length}</Tag>
             </div>
-          </div>
+          </Card>
         </Col>
         <Col xs={12} sm={12} md={6}>
-          <div className={`kpi-card ${firingCount > 0 ? 'accent-warning' : ''}`} onClick={() => navigate('/aiops/incidents')} style={{ cursor: 'pointer' }}>
-            <AlertOutlined className="kpi-icon" style={{ color: '#d97706' }} />
-            <div className="kpi-label"><AlertOutlined style={{ fontSize: 11 }} /> 活动告警</div>
-            <div>
-              <div className="kpi-value" style={{ fontSize: 28 }}>{firingCount}</div>
-              <div className="kpi-sub">
-                {criticalAlerts.length > 0 && <span style={{ color: '#dc2626', fontWeight: 600 }}>{criticalAlerts.length} 严重</span>}
-                {criticalAlerts.length > 0 && warningAlerts.length > 0 && ' · '}
-                {warningAlerts.length > 0 && <span style={{ color: '#d97706' }}>{warningAlerts.length} 警告</span>}
-                {firingCount === 0 && <span style={{ color: '#16a34a' }}>暂无活动告警</span>}
-              </div>
+          <Card size="small" style={{ borderLeft: '3px solid #d97706' }}>
+            <Statistic
+              title={<span><ClockCircleOutlined style={{ marginRight: 4 }} />待处理 / 已确认</span>}
+              value={openIncidents.length}
+              suffix={`/ ${acknowledgedIncidents.length}`}
+              valueStyle={{ fontSize: 28, color: '#d97706' }}
+            />
+            <div style={{ marginTop: 4, fontSize: 11, color: '#6b7280' }}>
+              待处理 {openIncidents.length} · 已确认 {acknowledgedIncidents.length}
             </div>
-          </div>
+          </Card>
         </Col>
         <Col xs={12} sm={12} md={6}>
-          <div className="kpi-card" onClick={() => navigate('/kubernetes/pods')} style={{ cursor: 'pointer' }}>
-            <AppstoreOutlined className="kpi-icon" style={{ color: '#7c3aed' }} />
-            <div className="kpi-label"><AppstoreOutlined style={{ fontSize: 11 }} /> 基础设施</div>
-            <div>
-              <div className="kpi-value" style={{ fontSize: 28 }}>{pods.length} <span style={{ fontSize: 16, color: '#9ca3af', fontWeight: 400 }}>容器</span></div>
-              <div className="kpi-sub">
-                <span style={{ color: '#16a34a' }}>{runningPods} 运行中</span>
-                {failedPods > 0 && <span style={{ color: '#dc2626' }}> · {failedPods} 失败</span>}
-                {abnormalPods.length > 0 && <span style={{ color: '#d97706' }}> · {abnormalPods.length} 异常</span>}
-              </div>
+          <Card size="small" style={{ borderLeft: '3px solid #3b82f6' }}>
+            <Statistic
+              title={<span><PlayCircleOutlined style={{ marginRight: 4 }} />今日新增</span>}
+              value={newToday.length}
+              valueStyle={{ fontSize: 28, color: '#3b82f6' }}
+            />
+            <div style={{ marginTop: 4, fontSize: 11, color: '#6b7280' }}>
+              今日已解决 {resolvedToday.length > 0 ? resolvedToday.length : 'N/A'}
             </div>
-          </div>
+          </Card>
         </Col>
         <Col xs={12} sm={12} md={6}>
-          <div className="kpi-card" onClick={() => navigate('/aiops/anomaly')} style={{ cursor: 'pointer' }}>
-            <FireOutlined className="kpi-icon" style={{ color: '#ea580c' }} />
-            <div className="kpi-label"><FireOutlined style={{ fontSize: 11 }} /> 异常检测</div>
-            <div>
-              <div className="kpi-value" style={{ fontSize: 28, color: activeAnomalyCount > 0 ? '#ea580c' : undefined }}>{activeAnomalyCount}</div>
-              <div className="kpi-sub">{activeAnomalyCount > 0 ? '检测到活动异常' : '暂无异常'}</div>
-            </div>
-          </div>
-        </Col>
-      </Row>
-
-      {/* Charts Row */}
-      <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
-        <Col xs={24} lg={16}>
-          <div className="aiops-card">
-            <div className="aiops-card-header">
-              <div className="aiops-card-title">资源趋势</div>
-              <Text type="secondary" style={{ fontSize: 12 }}>集群 CPU 与内存使用率</Text>
-            </div>
-            <div className="aiops-card-body" style={{ paddingTop: 8 }}>
-              {metricsError ? (
-                <div style={{ textAlign: 'center', padding: '40px 0' }}>
-                  <Text type="secondary">{metricsError}</Text>
-                </div>
-              ) : cpuSeries.length > 0 || memSeries.length > 0 ? (
-                <ReactECharts option={chartOption} style={{ height: 220 }} notMerge />
-              ) : (
-                <Empty description="暂无监控数据" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: '32px 0' }} />
+          <Card size="small" style={{ borderLeft: `3px solid ${verificationFailed.length > 0 ? '#dc2626' : '#16a34a'}` }}>
+            <Statistic
+              title={<span><RocketOutlined style={{ marginRight: 4 }} />自动化运行中</span>}
+              value={runningActions.length + runningWorkflows.length}
+              valueStyle={{ fontSize: 28, color: '#2563eb' }}
+            />
+            <div style={{ marginTop: 4, fontSize: 11 }}>
+              <Tag color="error" style={{ margin: 0, fontSize: 10 }}>失败 {failedActions.length + failedWorkflows.length}</Tag>
+              {verificationFailed.length > 0 && (
+                <Tag color="error" style={{ marginLeft: 4, fontSize: 10 }}>验证失败 {verificationFailed.length}</Tag>
               )}
             </div>
-          </div>
-        </Col>
-        <Col xs={24} lg={8}>
-          <div className="aiops-card" style={{ height: '100%' }}>
-            <div className="aiops-card-header">
-              <div className="aiops-card-title">告警概览</div>
-              <Button type="link" size="small" onClick={() => navigate('/alerts/realtime')}>查看全部</Button>
-            </div>
-            <div className="aiops-card-body">
-              <Row gutter={[8, 16]}>
-                <Col span={12}>
-                  <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: 28, fontWeight: 700, color: '#dc2626' }}>{criticalAlerts.length}</div>
-                    <div style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 0.5 }}>严重</div>
-                  </div>
-                </Col>
-                <Col span={12}>
-                  <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: 28, fontWeight: 700, color: '#d97706' }}>{warningAlerts.length}</div>
-                    <div style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 0.5 }}>警告</div>
-                  </div>
-                </Col>
-              </Row>
-              <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid #f3f4f6' }}>
-                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>集群健康度</div>
-                <Progress percent={Math.round(systemHealth)} strokeColor={healthColor} showInfo={false} size="small" />
-                <div style={{ fontSize: 12, color: healthColor, marginTop: 4, fontWeight: 500 }}>
-                  {systemHealth.toFixed(1)}% — {healthStatus === 'healthy' ? '健康' : healthStatus === 'warning' ? '降级' : '严重'}
-                </div>
-              </div>
-            </div>
-          </div>
+          </Card>
         </Col>
       </Row>
 
-      {/* Active Alerts + Abnormal Pods */}
-      <Row gutter={[12, 12]}>
-        <Col xs={24} lg={14}>
-          <div className="aiops-card">
-            <div className="aiops-card-header">
-              <div className="aiops-card-title">活动告警</div>
-              <Button type="link" size="small" onClick={() => navigate('/alerts/realtime')}>查看全部 →</Button>
-            </div>
-            <div className="aiops-card-body" style={{ padding: 0 }}>
-              <Spin spinning={loading}>
-                {alerts && alerts.items && alerts.items.length > 0 ? (
-                  <Table
-                    columns={alertColumns}
-                    dataSource={alerts.items.slice(0, 6)}
-                    rowKey="id"
-                    pagination={false}
-                    size="small"
-                    showHeader={true}
-                  />
-                ) : (
-                  <Empty description="暂无活动告警" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: '32px 0' }} />
-                )}
-              </Spin>
-            </div>
-          </div>
+      {/* MTTR Row */}
+      {mttrMinutes !== null && (
+        <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
+          <Col xs={24} sm={12} md={6}>
+            <Card size="small">
+              <Statistic
+                title="平均恢复时间 (MTTR)"
+                value={mttrMinutes.toFixed(1)}
+                suffix="分钟"
+                valueStyle={{ fontSize: 20 }}
+              />
+              <div style={{ fontSize: 11, color: '#6b7280' }}>基于 {resolvedIncidents.length} 个已解决事件</div>
+            </Card>
+          </Col>
+        </Row>
+      )}
+
+      {/* Priority Incidents */}
+      <Card
+        size="small"
+        style={{ marginBottom: 12 }}
+        title={
+          <Space>
+            <FireOutlined style={{ color: '#dc2626' }} />
+            <span>优先级事件 (Top {priorityIncidents.length})</span>
+          </Space>
+        }
+        extra={
+          <Button type="link" size="small" onClick={() => navigate('/aiops/incidents')}>查看全部</Button>
+        }
+      >
+        {incidentsLoading && priorityIncidents.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div>
+        ) : incidentsError ? (
+          <Alert type="error" message={incidentsError} showIcon />
+        ) : priorityIncidents.length === 0 ? (
+          <Empty description="暂无活跃事件" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        ) : (
+          <Table
+            dataSource={priorityIncidents}
+            columns={priorityColumns}
+            rowKey="id"
+            size="small"
+            pagination={false}
+            scroll={{ x: 900 }}
+          />
+        )}
+      </Card>
+
+      {/* Automation + Workflow Health */}
+      <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
+        <Col xs={24} lg={12}>
+          <Card
+            size="small"
+            title={<Space><AppstoreOutlined />自动化健康</Space>}
+            extra={<Button type="link" size="small" onClick={() => navigate('/automation/actions')}>管理</Button>}
+          >
+            {actionsLoading ? <Spin /> : (
+              <Row gutter={[8, 8]}>
+                <Col span={6}><Statistic title="运行中" value={runningActions.length} valueStyle={{ fontSize: 20, color: '#2563eb' }} /></Col>
+                <Col span={6}><Statistic title="失败" value={failedActions.length} valueStyle={{ fontSize: 20, color: '#dc2626' }} /></Col>
+                <Col span={6}><Statistic title="成功" value={successActions.length} valueStyle={{ fontSize: 20, color: '#16a34a' }} /></Col>
+                <Col span={6}><Statistic title="待审批" value={pendingActions.length} valueStyle={{ fontSize: 20, color: '#d97706' }} /></Col>
+              </Row>
+            )}
+            {verificationFailed.length > 0 && (
+              <Alert
+                type="error"
+                showIcon
+                style={{ marginTop: 8 }}
+                message={`${verificationFailed.length} 个操作执行成功但验证失败`}
+              />
+            )}
+          </Card>
         </Col>
-        <Col xs={24} lg={10}>
-          <div className="aiops-card">
-            <div className="aiops-card-header">
-              <div className="aiops-card-title">基础设施状态</div>
-              <Button type="link" size="small" onClick={() => navigate('/kubernetes/pods')}>容器 →</Button>
-            </div>
-            <div className="aiops-card-body" style={{ padding: 0 }}>
-              <Spin spinning={loading}>
-                {abnormalPods.length > 0 ? (
-                  <Table
-                    columns={podColumns}
-                    dataSource={abnormalPods.slice(0, 6)}
-                    rowKey="name"
-                    pagination={false}
-                    size="small"
-                  />
-                ) : (
-                  <div style={{ textAlign: 'center', padding: '32px 0' }}>
-                    <CheckCircleOutlined style={{ fontSize: 28, color: '#16a34a', marginBottom: 8 }} />
-                    <div style={{ fontSize: 13, color: '#6b7280' }}>所有容器运行正常</div>
-                    <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>{runningPods}/{pods.length} 容器运行中</div>
-                  </div>
-                )}
-              </Spin>
-            </div>
-          </div>
+        <Col xs={24} lg={12}>
+          <Card
+            size="small"
+            title={<Space><NodeIndexOutlined />工作流健康</Space>}
+            extra={<Button type="link" size="small" onClick={() => navigate('/automation/workflows')}>管理</Button>}
+          >
+            {workflowsLoading ? <Spin /> : (
+              <Row gutter={[8, 8]}>
+                <Col span={6}><Statistic title="运行中" value={runningWorkflows.length} valueStyle={{ fontSize: 20, color: '#2563eb' }} /></Col>
+                <Col span={6}><Statistic title="失败" value={failedWorkflows.length} valueStyle={{ fontSize: 20, color: '#dc2626' }} /></Col>
+                <Col span={6}><Statistic title="成功" value={successWorkflows.length} valueStyle={{ fontSize: 20, color: '#16a34a' }} /></Col>
+                <Col span={6}><Statistic title="待审批" value={pendingWorkflows.length} valueStyle={{ fontSize: 20, color: '#d97706' }} /></Col>
+              </Row>
+            )}
+          </Card>
         </Col>
       </Row>
+
+      {/* Affected Services / Namespaces */}
+      {topServices.length > 0 && (
+        <Card size="small" style={{ marginBottom: 12 }} title={<Space><CloudOutlined />受影响服务 / 命名空间</Space>}>
+          <Row gutter={[24, 12]}>
+            <Col xs={24} md={12}>
+              <Text strong style={{ fontSize: 12 }}>服务</Text>
+              <div style={{ marginTop: 8 }}>
+                {topServices.map(([svc, count]) => (
+                  <div key={svc} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #f3f4f6' }}>
+                    <Text style={{ fontSize: 12 }}>{svc}</Text>
+                    <Tag color={count >= 3 ? 'red' : count >= 2 ? 'orange' : 'blue'} style={{ margin: 0 }}>{count} 事件</Tag>
+                  </div>
+                ))}
+              </div>
+            </Col>
+            <Col xs={24} md={12}>
+              <Text strong style={{ fontSize: 12 }}>命名空间</Text>
+              <div style={{ marginTop: 8 }}>
+                {topNamespaces.map(([ns, count]) => (
+                  <div key={ns} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #f3f4f6' }}>
+                    <Text style={{ fontSize: 12 }}>{ns}</Text>
+                    <Tag color={count >= 3 ? 'red' : count >= 2 ? 'orange' : 'blue'} style={{ margin: 0 }}>{count} 事件</Tag>
+                  </div>
+                ))}
+              </div>
+            </Col>
+          </Row>
+        </Card>
+      )}
+
+      {/* Infrastructure Monitoring (次要区域) */}
+      <Card
+        size="small"
+        title={
+          <Space>
+            <HeartOutlined style={{ color: healthColor }} />
+            基础设施监控
+            <Tag color={healthColor === '#16a34a' ? 'success' : healthColor === '#d97706' ? 'warning' : 'error'} style={{ marginLeft: 8 }}>
+              系统健康 {systemHealth.toFixed(0)}%
+            </Tag>
+          </Space>
+        }
+        extra={
+          <Button type="link" size="small" onClick={() => setShowInfra(!showInfra)}>
+            {showInfra ? '收起' : '展开'}
+          </Button>
+        }
+      >
+        {showInfra && (
+          <>
+            <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
+              <Col xs={12} sm={6}><Statistic title="节点" value={nodes.length} prefix={<NodeIndexOutlined />} /></Col>
+              <Col xs={12} sm={6}><Statistic title="Pod" value={pods.length} prefix={<AppstoreOutlined />} suffix={`运行 ${runningPods}`} /></Col>
+              <Col xs={12} sm={6}><Statistic title="Firing 告警" value={firingCount} prefix={<AlertOutlined />} valueStyle={{ color: firingCount > 0 ? '#dc2626' : undefined }} /></Col>
+              <Col xs={12} sm={6}><Statistic title="活跃异常" value={activeAnomalyCount} prefix={<WarningOutlined />} /></Col>
+            </Row>
+            <Row gutter={[12, 12]}>
+              <Col xs={24} lg={16}>
+                <div style={{ background: '#fff', borderRadius: 6, padding: 8 }}>
+                  {metricsError ? (
+                    <Alert type="warning" message={metricsError} showIcon />
+                  ) : (
+                    <ReactECharts option={chartOption} style={{ height: 200 }} notMerge />
+                  )}
+                </div>
+              </Col>
+              <Col xs={24} lg={8}>
+                <Text strong style={{ fontSize: 12 }}>不健康 Pod ({failedPods})</Text>
+                <div style={{ maxHeight: 180, overflowY: 'auto', marginTop: 4 }}>
+                  {failedPods === 0 ? (
+                    <Empty description="全部正常" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: 16 }} />
+                  ) : (
+                    pods.filter((p) => p.status !== 'Running' && p.status !== 'Succeeded' && p.status !== 'Completed').slice(0, 10).map((p) => (
+                      <div key={p.name} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #f3f4f6', fontSize: 12 }}>
+                        <Text ellipsis style={{ maxWidth: 140 }}>{p.name}</Text>
+                        <Tag color="error" style={{ margin: 0, fontSize: 10 }}>{p.status}</Tag>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </Col>
+            </Row>
+          </>
+        )}
+      </Card>
+
+      {/* Incident Detail Drawer */}
+      <IncidentDetail
+        id={selectedIncidentId}
+        open={incidentDetailOpen}
+        onClose={() => setIncidentDetailOpen(false)}
+        onChanged={() => { loadOperationsData(); }}
+      />
     </div>
   )
 }
