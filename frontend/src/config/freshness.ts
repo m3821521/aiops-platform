@@ -19,7 +19,9 @@ export const DATA_FRESHNESS_THRESHOLDS = {
   mysql: 30000,
   /** Elasticsearch：30s polling，阈值 30s */
   elasticsearch: 30000,
-  /** Topology：30s polling + 60s Redis cache，阈值 60s */
+  /** Topology：30s frontend polling + 60s Redis cache（后端缓存 K8s+Prometheus 聚合结果）。
+   *  阈值 60s = cache TTL。注意：Data Trust 测量的是 API 获取成功时间，
+   *  不保证 underlying source 数据生成时间（可能来自 Redis cache）。 */
   topology: 60000,
   /** External Connection：30s GET list + 5min backend HealthChecker，阈值 5min */
   connection: 300000,
@@ -29,14 +31,16 @@ export const DATA_FRESHNESS_THRESHOLDS = {
 
 export type DataSourceType = keyof typeof DATA_FRESHNESS_THRESHOLDS
 
-/** 数据源显示名称（集中定义，不散落硬编码） */
+/** 数据源显示名称（集中定义，不散落硬编码）。
+ *  注意：source label 表示前端调用的 API/Provider 标识，
+ *  不保证数据直接来自底层数据源（如 topology 可能经过 Redis cache）。 */
 export const DATA_SOURCE_LABELS: Record<DataSourceType, string> = {
   kubernetes: 'Kubernetes API',
   prometheus: 'Prometheus API',
   alertmanager: 'Alertmanager API',
   mysql: 'MySQL API',
   elasticsearch: 'Elasticsearch API',
-  topology: 'Kubernetes + Prometheus',
+  topology: 'Topology API (Redis cache)',
   connection: 'Connection API',
   dashboard: 'Multiple Sources',
 }

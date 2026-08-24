@@ -26,6 +26,8 @@ import type {
   Incident,
 } from '@/types'
 import dayjs from 'dayjs'
+import { useDataTrust } from '@/hooks/useDataTrust'
+import { DataTrustIndicator } from '@/components/DataTrustIndicator'
 
 const { Title, Text } = Typography
 
@@ -62,6 +64,37 @@ export default function Dashboard() {
   const navigate = useNavigate()
   const refreshTokenRef = useRef(0)
   const pollingRef = useRef<number | null>(null)
+
+  // === P1-X.9: Multi-Source Data Trust ===
+  // 每个核心数据源独立跟踪 success/failure/lastSuccessfulAt
+  const incidentTrust = useDataTrust({ source: 'mysql' })
+  const actionTrust = useDataTrust({ source: 'mysql' })
+  const workflowTrust = useDataTrust({ source: 'mysql' })
+  const alertTrust = useDataTrust({ source: 'alertmanager' })
+  const metricsTrust = useDataTrust({ source: 'prometheus' })
+  const kpiTrust = useDataTrust({ source: 'mysql' })
+
+  // 组合整体状态：ALL_SUCCESS / PARTIAL_FAILURE / ALL_FAILURE
+  const allTrusts = [incidentTrust, actionTrust, workflowTrust, alertTrust, metricsTrust, kpiTrust]
+  const anyFetching = allTrusts.some(t => t.status === 'fetching')
+  const failedSources = allTrusts.filter(t => t.status === 'stale' || t.status === 'error')
+  const successfulSources = allTrusts.filter(t => t.status === 'fresh')
+  const hasAnySuccess = successfulSources.length > 0
+  const dashboardTrustStatus: 'fresh' | 'fetching' | 'stale' | 'error' =
+    anyFetching ? 'fetching'
+    : failedSources.length === 0 && hasAnySuccess ? 'fresh'
+    : hasAnySuccess ? 'stale'
+    : 'error'
+  const dashboardLastSuccessful = allTrusts
+    .map(t => t.lastSuccessfulAt)
+    .filter(Boolean)
+    .sort((a, b) => b!.getTime() - a!.getTime())[0]
+  const dashboardAge = dashboardLastSuccessful
+    ? Math.floor((Date.now() - dashboardLastSuccessful.getTime()) / 1000)
+    : undefined
+  const dashboardError = failedSources.length > 0
+    ? `${failedSources.length} 个数据源刷新失败: ${failedSources.map(t => t.sourceLabel).join(', ')}`
+    : undefined
 
   // === Operations Data ===
   const [incidents, setIncidents] = useState<Incident[]>([])
@@ -125,10 +158,27 @@ export default function Dashboard() {
     setActionsLoading(true)
     setWorkflowsLoading(true)
 
+    // P1-X.9: 每个数据源独立 beginFetch
+    const incSeq = incidentTrust.beginFetch()
+    const actSeq = actionTrust.beginFetch()
+    const wfSeq = workflowTrust.beginFetch()
+    const kpiSeq = kpiTrust.beginFetch()
+    const alertSeq = alertTrust.beginFetch()
+
     // 独立请求，互不影响
     const incidentPromise = incidentApi.list({ page: 1, page_size: 200 })
-      .then((res) => { if (token === refreshTokenRef.current) setIncidents(res.items || []) })
-      .catch((err) => { if (token === refreshTokenRef.current) setIncidentsError(err?.message || 'Incident 加载失败') })
+      .then((res) => {
+        if (token === refreshTokenRef.current) {
+          setIncidents(res.items || [])
+          incidentTrust.markSuccess(incSeq)
+        }
+      })
+      .catch((err) => {
+        if (token === refreshTokenRef.current) {
+          setIncidentsError(err?.message || 'Incident 加载失败')
+          incidentTrust.markError(incSeq, err?.message || 'Incident 加载失败')
+        }
+      })
       .finally(() => { if (token === refreshTokenRef.current) setIncidentsLoading(false) })
 
     const actionPromise = automationApi.list({ page: 1, page_size: 100 })
@@ -136,6 +186,7 @@ export default function Dashboard() {
         if (token !== refreshTokenRef.current) return
         const actionList = res.items || []
         setActions(actionList)
+        actionTrust.markSuccess(actSeq)
         // 对 success Action 加载 executions 获取 Verification（限制数量，避免 N+1 限流）
         const successActions = actionList.filter((a) => a.status === 'success').slice(0, 5)
         const execResults = await Promise.allSettled(
@@ -150,12 +201,25 @@ export default function Dashboard() {
         })
         setActionExecutions(allExecs)
       })
-      .catch(() => {})
+      .catch((err: any) => {
+        if (token === refreshTokenRef.current) {
+          actionTrust.markError(actSeq, err?.message || 'Action 加载失败')
+        }
+      })
       .finally(() => { if (token === refreshTokenRef.current) setActionsLoading(false) })
 
     const workflowPromise = workflowApi.list({ page: 1, page_size: 100 })
-      .then((res) => { if (token === refreshTokenRef.current) setWorkflows(res.items || []) })
-      .catch(() => {})
+      .then((res) => {
+        if (token === refreshTokenRef.current) {
+          setWorkflows(res.items || [])
+          workflowTrust.markSuccess(wfSeq)
+        }
+      })
+      .catch((err: any) => {
+        if (token === refreshTokenRef.current) {
+          workflowTrust.markError(wfSeq, err?.message || 'Workflow 加载失败')
+        }
+      })
       .finally(() => { if (token === refreshTokenRef.current) setWorkflowsLoading(false) })
 
     await Promise.allSettled([incidentPromise, actionPromise, workflowPromise])
@@ -214,6 +278,20 @@ export default function Dashboard() {
         failedWorkflows: getTotal(9),
         criticalAlerts: getTotal(10),
       })
+      // P1-X.9: KPI 整体成功/失败判断
+      const kpiFailed = kpiResults.some((r: any) => r && r.status === 'rejected')
+      if (kpiFailed) {
+        kpiTrust.markError(kpiSeq, '部分 KPI 统计请求失败')
+      } else {
+        kpiTrust.markSuccess(kpiSeq)
+      }
+      // Alert critical 单独跟踪（KPI 最后一个请求）
+      const alertResult = kpiResults[10]
+      if (alertResult && alertResult.status === 'fulfilled') {
+        alertTrust.markSuccess(alertSeq)
+      } else {
+        alertTrust.markError(alertSeq, 'Alert critical 统计请求失败')
+      }
     }
 
     if (token === refreshTokenRef.current) setLastUpdated(dayjs())
@@ -248,6 +326,7 @@ export default function Dashboard() {
   // === 加载 Metrics ===
   const loadMetrics = useCallback(async () => {
     if (clusters.length === 0) return
+    const mSeq = metricsTrust.beginFetch()
     setMetricsError('')
     const seconds = timeRange === '1h' ? 3600 : timeRange === '6h' ? 21600 : 86400
     const end = Math.floor(Date.now() / 1000)
@@ -261,8 +340,10 @@ export default function Dashboard() {
       ])
       if (cpuData?.data?.result?.[0]?.values) setCpuSeries(cpuData.data.result[0].values)
       if (memData?.data?.result?.[0]?.values) setMemSeries(memData.data.result[0].values)
-    } catch {
+      metricsTrust.markSuccess(mSeq)
+    } catch (err: any) {
       setMetricsError('监控数据不可用')
+      metricsTrust.markError(mSeq, err?.message || '监控数据不可用')
     }
   }, [clusters, timeRange])
 
@@ -483,6 +564,39 @@ export default function Dashboard() {
           刷新
         </Button>
       </div>
+
+      {/* P1-X.9: Multi-Source Data Trust Indicator */}
+      <div style={{ marginBottom: 12 }}>
+        <DataTrustIndicator
+          status={dashboardTrustStatus}
+          lastSuccessfulAt={dashboardLastSuccessful}
+          ageSeconds={dashboardAge}
+          sourceLabel="Multiple Sources"
+          error={dashboardError}
+          formatAge={() => dashboardAge !== undefined ? (dashboardAge < 60 ? `${dashboardAge}s` : `${Math.floor(dashboardAge / 60)}m ${dashboardAge % 60}s`) : 'N/A'}
+          formatLastSuccessful={() => dashboardLastSuccessful ? dashboardLastSuccessful.toLocaleTimeString('zh-CN', { hour12: false }) : 'Never'}
+        />
+      </div>
+
+      {/* Partial Failure Alert */}
+      {dashboardTrustStatus === 'stale' && dashboardError && (
+        <Alert
+          type="warning"
+          showIcon
+          message="部分数据源刷新失败"
+          description={`${dashboardError}。当前显示的是最近一次成功获取的数据，可能已过期。`}
+          style={{ marginBottom: 12 }}
+        />
+      )}
+      {dashboardTrustStatus === 'error' && (
+        <Alert
+          type="error"
+          showIcon
+          message="所有数据源刷新失败"
+          description="无法获取当前运维态势数据，请检查后端服务和外部连接状态。"
+          style={{ marginBottom: 12 }}
+        />
+      )}
 
       {/* KPI Row 1 */}
       <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
