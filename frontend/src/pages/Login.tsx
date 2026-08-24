@@ -30,17 +30,14 @@ export default function Login() {
           styles={{ body: { padding: '32px 24px' } }}
         >
           <div style={{ textAlign: 'center', marginBottom: 32 }}>
-            <h1 style={{ color: '#fff', fontSize: 24, marginBottom: 8 }}>AIOps 智能运维平台</h1>
-            <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13 }}>
-              企业级 Kubernetes / DevOps / AIOps 控制台
-            </p>
+            <h1 style={{ color: '#fff', fontSize: 24, marginBottom: 0 }}>AIOps 智能运维平台</h1>
           </div>
           <Form
             name="login"
             onFinish={onFinish}
             autoComplete="off"
             size="large"
-            initialValues={{ username: 'admin', password: 'admin123' }}
+            initialValues={{ username: 'admin' }}
           >
             <Form.Item
               name="username"
@@ -60,9 +57,6 @@ export default function Login() {
               </Button>
             </Form.Item>
           </Form>
-          <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.4)', fontSize: 12 }}>
-            默认账号: admin / admin123
-          </div>
         </Card>
       </div>
     </ConfigProvider>

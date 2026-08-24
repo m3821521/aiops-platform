@@ -223,6 +223,7 @@ export default function AuditLogs() {
         </Card>
 
         <Table
+          scroll={{ x: 'max-content' }}
           columns={columns}
           dataSource={logs}
           rowKey="id"

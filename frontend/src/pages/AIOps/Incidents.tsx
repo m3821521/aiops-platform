@@ -209,6 +209,7 @@ export default function Incidents() {
         <Spin spinning={loading}>
           {data && data.items.length > 0 ? (
             <Table
+              scroll={{ x: 'max-content' }}
               dataSource={data.items}
               columns={columns}
               rowKey="id"

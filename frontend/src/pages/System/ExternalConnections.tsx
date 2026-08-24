@@ -366,6 +366,7 @@ export default function ExternalConnections() {
         }
       >
         <Table
+          scroll={{ x: 'max-content' }}
           columns={columns}
           dataSource={connections}
           rowKey="id"

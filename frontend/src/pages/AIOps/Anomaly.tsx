@@ -262,6 +262,7 @@ export default function Anomaly() {
         </Row>
 
         <Table
+          scroll={{ x: 'max-content' }}
           rowKey="id"
           columns={columns}
           dataSource={data}

@@ -134,7 +134,6 @@ export default function MainLayout() {
               margin: '8px 16px 16px',
               padding: 0,
               minHeight: 280,
-              overflow: 'auto',
               background: 'transparent',
             }}
           >

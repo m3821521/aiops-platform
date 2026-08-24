@@ -272,6 +272,7 @@ export default function AlertHistory() {
 
         <Spin spinning={loading}>
           <Table
+            scroll={{ x: 'max-content' }}
             rowKey="id"
             columns={columns}
             dataSource={data?.items || []}

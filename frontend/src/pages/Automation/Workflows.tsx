@@ -205,6 +205,7 @@ export default function Workflows() {
           columns={columns}
           dataSource={items}
           loading={loading}
+          scroll={{ x: 'max-content' }}
           pagination={{ current: page, pageSize, total, showSizeChanger: true, onChange: (p, ps) => { setPage(p); setPageSize(ps) } }}
           size="small"
         />

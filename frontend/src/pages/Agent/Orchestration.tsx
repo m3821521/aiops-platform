@@ -302,6 +302,7 @@ export default function MultiAgentOrchestration() {
         }
       >
         <Table
+          scroll={{ x: 'max-content' }}
           columns={columns}
           dataSource={results}
           rowKey="task_id"

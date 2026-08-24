@@ -287,6 +287,7 @@ export default function UserManagement() {
         }
       >
         <Table
+          scroll={{ x: 'max-content' }}
           columns={columns}
           dataSource={users}
           rowKey="id"

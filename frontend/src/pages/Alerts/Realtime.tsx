@@ -258,6 +258,7 @@ export default function AlertList() {
       <Spin spinning={loading}>
         {filtered.length > 0 || loading ? (
           <Table
+            scroll={{ x: 'max-content' }}
             columns={columns}
             dataSource={filtered}
             rowKey="id"

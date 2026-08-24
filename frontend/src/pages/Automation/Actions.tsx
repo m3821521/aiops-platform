@@ -478,6 +478,7 @@ export default function AutomationActions() {
           columns={columns}
           dataSource={actions}
           loading={loading}
+          scroll={{ x: 'max-content' }}
           pagination={{
             current: page,
             pageSize,
