@@ -28,6 +28,7 @@ const SystemRoles = lazy(() => import('@/pages/System/Roles'))
 const SystemAuditLogs = lazy(() => import('@/pages/System/AuditLogs'))
 const ExternalConnections = lazy(() => import('@/pages/System/ExternalConnections'))
 const AgentOrchestration = lazy(() => import('@/pages/Agent/Orchestration'))
+const RCAAnalysis = lazy(() => import('@/pages/AIOps/RCAAnalysis'))
 const Placeholder = lazy(() => import('@/pages/Placeholder'))
 
 // 懒加载页面的 Suspense 包装
@@ -75,7 +76,7 @@ export const router = createBrowserRouter([
       // AIOps
       { path: 'aiops/incidents', element: <LazyPage><Incidents /></LazyPage> },
       { path: 'aiops/anomaly', element: <LazyPage><Anomaly /></LazyPage> },
-      { path: 'aiops/rca', element: <LazyPage><Placeholder title="根因分析" phase="Phase 7" /></LazyPage> },
+      { path: 'aiops/rca', element: <LazyPage><RCAAnalysis /></LazyPage> },
       { path: 'aiops/topology', element: <LazyPage><Topology /></LazyPage> },
       // Logs
       { path: 'logs/search', element: <LazyPage><LogSearch /></LazyPage> },
