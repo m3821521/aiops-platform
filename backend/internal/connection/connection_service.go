@@ -42,6 +42,8 @@ func (s *ConnectionService) RegisterOnChanged(cb ConnectionChangeCallback) {
 }
 
 // notifyChanged 触发所有变更回调（异步执行，不阻塞 API）。
+// 注意：使用 context.Background() 而非请求 ctx，因为回调在异步 goroutine 中执行，
+// HTTP 请求结束后请求 ctx 会被取消，导致 GORM 查询返回空结果。
 func (s *ConnectionService) notifyChanged(ctx context.Context, connType ConnectionType) {
 	if len(s.onChanged) == 0 {
 		return
@@ -53,7 +55,8 @@ func (s *ConnectionService) notifyChanged(ctx context.Context, connType Connecti
 					// 防止回调 panic 影响整个进程
 				}
 			}()
-			callback(ctx, connType)
+			// 使用独立的 context，避免请求 ctx 被取消后影响异步查询
+			callback(context.Background(), connType)
 		}(cb)
 	}
 }
