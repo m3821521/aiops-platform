@@ -318,6 +318,64 @@ func main() {
 		slog.Info("argocd client migrated to provider factory")
 	}
 
+	// LogsHandler 提前创建，用于 Connection 变更回调动态更新 ES client
+	logsHandler := &handler.LogsHandler{ES: esClient, Analyzer: logAnalyzer}
+
+	// P5-E: Connection 变更动态更新 Provider
+	// 在 Connection 创建/更新/删除/启用/禁用后，自动重新构建对应 Provider，
+	// 避免用户添加 Connection 后需要重启后端才能生效。
+	connectionService.RegisterOnChanged(func(ctx context.Context, connType connection.ConnectionType) {
+		switch connType {
+		case connection.TypeKubernetes:
+			if clusters, err := providerFactory.BuildKubernetesClusters(ctx); err == nil {
+				if len(clusters) > 0 {
+					mgr.SetClusters(clusters)
+					slog.Info("kubernetes cluster manager refreshed by connection change", "clusters", len(clusters))
+				} else {
+					// 没有 K8s Connection 时，回退到 legacy config
+					if legacyClusters, err := cluster.LoadRegistry(cfg.Cluster.ConfigPath); err == nil {
+						mgr.SetClusters(legacyClusters)
+						slog.Info("kubernetes cluster manager fell back to legacy config", "clusters", len(legacyClusters))
+					}
+				}
+			} else {
+				slog.Warn("failed to refresh kubernetes clusters on connection change", "error", err)
+			}
+
+		case connection.TypePrometheus:
+			if newQuerier, err := providerFactory.BuildPrometheusQuerier(ctx, rdb); err == nil && newQuerier != nil {
+				querier = newQuerier
+				if metricsHandler != nil {
+					metricsHandler.Prom = newQuerier
+				}
+				if anomalyService != nil {
+					anomalyService.SetQuerier(newQuerier)
+				}
+				slog.Info("prometheus querier refreshed by connection change")
+			}
+
+		case connection.TypeElasticsearch:
+			if newES, err := providerFactory.BuildElasticsearchClient(ctx); err == nil && newES != nil {
+				esClient = newES
+				logsHandler.ES = newES
+				slog.Info("elasticsearch client refreshed by connection change")
+			}
+
+		case connection.TypeJenkins:
+			if newJenkins, err := providerFactory.BuildJenkinsClient(ctx); err == nil && newJenkins != nil {
+				jenkinsClient = newJenkins
+				slog.Info("jenkins client refreshed by connection change")
+			}
+
+		case connection.TypeArgoCD:
+			if newArgo, err := providerFactory.BuildArgoCDClient(ctx); err == nil && newArgo != nil {
+				argocdClient = newArgo
+				slog.Info("argocd client refreshed by connection change")
+			}
+		}
+	})
+	slog.Info("connection change callback registered for dynamic provider refresh")
+
 	// Automation Action Framework（审批+执行+审计）。
 	actionRepo := automation.NewActionRepository(db)
 	executionRepo := automation.NewExecutionRepository(db)
@@ -469,7 +527,7 @@ func main() {
 		Alert:      &handler.AlertHandler{Repo: alertRepo, Aggregator: alertAggregator, NoiseReducer: alertNoiseReducer, IncidentService: incidentService},
 		Anomaly:    anomalyHandler,
 		RCA:        &handler.RCAHandler{AlertRepo: alertRepo, Engine: rcaEngine},
-		Logs:       &handler.LogsHandler{ES: esClient, Analyzer: logAnalyzer},
+		Logs:       logsHandler,
 		AI:         aiHandler,
 		AIConfig:   aiConfigHandler,
 		AIConversation: convHandler,

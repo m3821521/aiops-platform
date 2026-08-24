@@ -6,6 +6,12 @@ import (
 	"time"
 )
 
+// ConnectionChangeCallback 是 Connection 变更回调函数类型。
+// 在 Connection 创建/更新/删除/启用/禁用成功后调用，
+// 用于动态更新 Provider（K8s cluster.Manager、Prometheus、ES 等）。
+// connType 为变更的 Connection 类型，可能为空（删除时）。
+type ConnectionChangeCallback func(ctx context.Context, connType ConnectionType)
+
 // ConnectionService 是 Connection 的业务逻辑层。
 //
 // 安全原则：
@@ -16,6 +22,7 @@ import (
 type ConnectionService struct {
 	repo              *ConnectionRepository
 	credentialService *CredentialService
+	onChanged         []ConnectionChangeCallback
 }
 
 // NewConnectionService 创建 Connection Service。
@@ -23,6 +30,31 @@ func NewConnectionService(repo *ConnectionRepository, credentialService *Credent
 	return &ConnectionService{
 		repo:              repo,
 		credentialService: credentialService,
+		onChanged:         nil,
+	}
+}
+
+// RegisterOnChanged 注册 Connection 变更回调。
+// 回调在 Create/Update/Delete/Enable/Disable 成功后异步执行（goroutine），
+// 避免阻塞 API 响应。回调内部应自行处理错误和 panic。
+func (s *ConnectionService) RegisterOnChanged(cb ConnectionChangeCallback) {
+	s.onChanged = append(s.onChanged, cb)
+}
+
+// notifyChanged 触发所有变更回调（异步执行，不阻塞 API）。
+func (s *ConnectionService) notifyChanged(ctx context.Context, connType ConnectionType) {
+	if len(s.onChanged) == 0 {
+		return
+	}
+	for _, cb := range s.onChanged {
+		go func(callback ConnectionChangeCallback) {
+			defer func() {
+				if r := recover(); r != nil {
+					// 防止回调 panic 影响整个进程
+				}
+			}()
+			callback(ctx, connType)
+		}(cb)
 	}
 }
 
@@ -82,6 +114,9 @@ func (s *ConnectionService) Create(ctx context.Context, req CreateConnectionRequ
 	if err := s.repo.Create(ctx, conn); err != nil {
 		return nil, err
 	}
+
+	// 触发变更回调，动态更新 Provider
+	s.notifyChanged(ctx, conn.Type)
 
 	return s.toView(ctx, conn), nil
 }
@@ -191,6 +226,9 @@ func (s *ConnectionService) Update(ctx context.Context, id int64, req UpdateConn
 		return nil, err
 	}
 
+	// 触发变更回调，动态更新 Provider
+	s.notifyChanged(ctx, conn.Type)
+
 	return s.toView(ctx, conn), nil
 }
 
@@ -207,7 +245,14 @@ func (s *ConnectionService) Delete(ctx context.Context, id int64) error {
 	if conn.IsSystemDefault {
 		return errors.New("system default connection 不允许删除")
 	}
-	return s.repo.Delete(ctx, id)
+	connType := conn.Type
+	if err := s.repo.Delete(ctx, id); err != nil {
+		return err
+	}
+
+	// 触发变更回调，动态更新 Provider
+	s.notifyChanged(ctx, connType)
+	return nil
 }
 
 // Enable 启用 Connection。

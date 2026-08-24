@@ -9,7 +9,9 @@ import (
 )
 
 func TestValidateIP_Loopback(t *testing.T) {
-	st := NewSafeTransport(DefaultConfig())
+	// 使用严格配置（空 Allowlist），验证 loopback IP 被阻止
+	strictConfig := SafeTransportConfig{DialTimeout: 5 * time.Second, Allowlist: nil}
+	st := NewSafeTransport(strictConfig)
 	err := st.validateIP(net.ParseIP("127.0.0.1"))
 	if err == nil {
 		t.Error("expected loopback 127.0.0.1 to be blocked")
@@ -114,7 +116,9 @@ func TestAllowlist(t *testing.T) {
 }
 
 func TestValidateEndpoint_Loopback(t *testing.T) {
-	st := NewSafeTransport(DefaultConfig())
+	// 使用严格配置（空 Allowlist），验证 loopback 默认被阻止
+	strictConfig := SafeTransportConfig{DialTimeout: 5 * time.Second, Allowlist: nil}
+	st := NewSafeTransport(strictConfig)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -151,7 +155,9 @@ func TestSafeTransport_ImplementsRoundTripper(t *testing.T) {
 
 // TestCheckRedirect_BlocksLoopback 验证重定向到 loopback 地址被阻止。
 func TestCheckRedirect_BlocksLoopback(t *testing.T) {
-	st := NewSafeTransport(DefaultConfig())
+	// 使用严格配置（空 Allowlist），验证 loopback 重定向被阻止
+	strictConfig := SafeTransportConfig{DialTimeout: 5 * time.Second, Allowlist: nil}
+	st := NewSafeTransport(strictConfig)
 	req, _ := http.NewRequest("GET", "http://127.0.0.1:8080/redirect-target", nil)
 	err := st.checkRedirect(req, []*http.Request{})
 	if err == nil {

@@ -21,6 +21,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"syscall"
 	"time"
 )
@@ -41,12 +42,24 @@ type SafeTransportConfig struct {
 }
 
 // DefaultConfig 返回默认配置。
+// 开发环境（GIN_MODE=debug 或 AIOPS_ENV=dev）自动允许 loopback 地址，
+// 方便连接本地 minikube/Prometheus/Elasticsearch 等服务。
+// 生产环境保持严格策略，阻止 loopback/link-local/unspecified。
 func DefaultConfig() SafeTransportConfig {
-	return SafeTransportConfig{
+	config := SafeTransportConfig{
 		DialTimeout:  10 * time.Second,
 		Allowlist:    nil,
 		BlockPrivate: false,
 	}
+
+	// 开发环境自动允许 loopback 地址
+	ginMode := os.Getenv("GIN_MODE")
+	aiopsEnv := os.Getenv("AIOPS_ENV")
+	if ginMode == "debug" || ginMode == "" || aiopsEnv == "dev" || aiopsEnv == "development" {
+		config.Allowlist = []string{"127.0.0.1", "::1", "localhost"}
+	}
+
+	return config
 }
 
 // SafeTransport 是一个 http.RoundTripper，在建立连接前验证目标 IP 地址。
