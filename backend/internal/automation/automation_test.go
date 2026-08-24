@@ -2,6 +2,9 @@ package automation
 
 import (
 	"context"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -886,5 +889,218 @@ func TestRecoveryCAS_Race(t *testing.T) {
 	total := c1 + c2
 	if total != 1 {
 		t.Errorf("expected total 1 recovered (CAS race), got %d (%d + %d)", total, c1, c2)
+	}
+}
+
+// TestRollbackClaim P0-05.3: 验证 Claim 后用 CAS 回滚到 approved。
+func TestRollbackClaim(t *testing.T) {
+	db := setupTestDB(t)
+	repo := NewActionRepository(db)
+	ctx := context.Background()
+
+	// 创建 approved action
+	action := &Action{
+		ActionType: ActionRestartPod,
+		Status:     StatusApproved,
+		TargetType: "pod",
+		TargetName: "rollback-test-pod",
+		Cluster:    "test",
+		Namespace:  "default",
+	}
+	if err := repo.Create(ctx, action); err != nil {
+		t.Fatalf("create action failed: %v", err)
+	}
+
+	// Claim 成功
+	claimed, err := repo.ClaimForExecution(ctx, action.ID, 60*time.Second)
+	if err != nil {
+		t.Fatalf("claim failed: %v", err)
+	}
+	if !claimed {
+		t.Fatal("expected claim to succeed")
+	}
+
+	// 验证状态为 running
+	claimedAction, _ := repo.FindByID(ctx, action.ID)
+	if claimedAction.Status != StatusRunning {
+		t.Fatalf("expected status %s after claim, got %s", StatusRunning, claimedAction.Status)
+	}
+
+	// 回滚
+	rolledBack, err := repo.RollbackClaim(ctx, action.ID)
+	if err != nil {
+		t.Fatalf("rollback failed: %v", err)
+	}
+	if !rolledBack {
+		t.Fatal("expected rollback to succeed")
+	}
+
+	// 验证状态回到 approved，lease 为 NULL
+	rolledBackAction, _ := repo.FindByID(ctx, action.ID)
+	if rolledBackAction.Status != StatusApproved {
+		t.Errorf("expected status %s after rollback, got %s", StatusApproved, rolledBackAction.Status)
+	}
+	if rolledBackAction.LeaseExpiresAt != nil {
+		t.Errorf("expected lease_expires_at to be NULL after rollback, got %v", rolledBackAction.LeaseExpiresAt)
+	}
+}
+
+// TestRollbackClaim_NotRunning P0-05.3: 验证非 running 状态不会被回滚。
+func TestRollbackClaim_NotRunning(t *testing.T) {
+	db := setupTestDB(t)
+	repo := NewActionRepository(db)
+	ctx := context.Background()
+
+	// 创建 success 状态的 action
+	action := &Action{
+		ActionType: ActionRestartPod,
+		Status:     StatusSuccess,
+		TargetType: "pod",
+		TargetName: "not-running-pod",
+		Cluster:    "test",
+		Namespace:  "default",
+	}
+	if err := repo.Create(ctx, action); err != nil {
+		t.Fatalf("create action failed: %v", err)
+	}
+
+	// 尝试回滚（应该失败，因为状态不是 running）
+	rolledBack, err := repo.RollbackClaim(ctx, action.ID)
+	if err != nil {
+		t.Fatalf("rollback failed: %v", err)
+	}
+	if rolledBack {
+		t.Error("expected rollback to fail for non-running action")
+	}
+
+	// 验证状态仍然是 success
+	stillSuccess, _ := repo.FindByID(ctx, action.ID)
+	if stillSuccess.Status != StatusSuccess {
+		t.Errorf("expected status %s unchanged, got %s", StatusSuccess, stillSuccess.Status)
+	}
+}
+
+// TestRecovery_NonRunningNotAffected P0-05.3: 验证非 running 状态不会被 startup recovery 影响。
+func TestRecovery_NonRunningNotAffected(t *testing.T) {
+	db := setupTestDB(t)
+	repo := NewActionRepository(db)
+	ctx := context.Background()
+	now := time.Now()
+
+	// 创建各种非 running 状态的 action，lease=NULL，updated_at 很旧
+	statuses := []ActionStatus{StatusSuccess, StatusFailed, StatusTimeout, StatusCancelled, StatusApproved, StatusRejected}
+	actionIDs := make([]int64, len(statuses))
+	for i, status := range statuses {
+		action := &Action{
+			ActionType: ActionRestartPod,
+			Status:     status,
+			TargetType: "pod",
+			TargetName: fmt.Sprintf("non-running-pod-%d", i),
+			Cluster:    "test",
+			Namespace:  "default",
+			CreatedAt:  now.Add(-1 * time.Hour),
+			UpdatedAt:  now.Add(-1 * time.Hour),
+		}
+		if err := repo.Create(ctx, action); err != nil {
+			t.Fatalf("create action failed: %v", err)
+		}
+		actionIDs[i] = action.ID
+	}
+
+	// 执行 startup recovery
+	count, err := repo.MarkStaleRunningAsTimeout(ctx, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("startup recovery failed: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 recovered (no running actions), got %d", count)
+	}
+
+	// 验证所有非 running action 状态不变
+	for i, status := range statuses {
+		action, err := repo.FindByID(ctx, actionIDs[i])
+		if err != nil {
+			t.Errorf("find action %d failed: %v", i, err)
+			continue
+		}
+		if action.Status != status {
+			t.Errorf("action %d: expected status %s, got %s", i, status, action.Status)
+		}
+	}
+}
+
+// TestConcurrentClaim_SameTarget P0-05.3: 100 并发 same target，只有 1 个成功 Claim。
+func TestConcurrentClaim_SameTarget(t *testing.T) {
+	db := setupTestDB(t)
+	// SQLite 内存数据库需要单连接，否则并发 goroutine 可能使用不同连接看不到表
+	sqlDB, _ := db.DB()
+	sqlDB.SetMaxOpenConns(1)
+	repo := NewActionRepository(db)
+	ctx := context.Background()
+
+	// 创建 100 个 approved action，全部指向同一个 target
+	const numActions = 100
+	actionIDs := make([]int64, numActions)
+	for i := 0; i < numActions; i++ {
+		action := &Action{
+			ActionType: ActionRestartPod,
+			Status:     StatusApproved,
+			TargetType: "pod",
+			TargetName: "concurrent-target-pod",
+			Cluster:    "test",
+			Namespace:  "default",
+		}
+		if err := repo.Create(ctx, action); err != nil {
+			t.Fatalf("create action %d failed: %v", i, err)
+		}
+		actionIDs[i] = action.ID
+	}
+
+	// 100 个 goroutine 并发 Claim
+	successCount := int32(0)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	claimedIDs := make([]int64, 0)
+
+	for i := 0; i < numActions; i++ {
+		wg.Add(1)
+		go func(id int64) {
+			defer wg.Done()
+			claimed, err := repo.ClaimForExecution(ctx, id, 60*time.Second)
+			if err != nil {
+				return
+			}
+			if claimed {
+				atomic.AddInt32(&successCount, 1)
+				mu.Lock()
+				claimedIDs = append(claimedIDs, id)
+				mu.Unlock()
+			}
+		}(actionIDs[i])
+	}
+	wg.Wait()
+
+	// 验证只有 1 个成功
+	if successCount != 1 {
+		t.Errorf("expected exactly 1 successful claim (same target concurrency), got %d", successCount)
+	}
+
+	// 验证成功的那个状态为 running
+	if len(claimedIDs) == 1 {
+		claimedAction, _ := repo.FindByID(ctx, claimedIDs[0])
+		if claimedAction.Status != StatusRunning {
+			t.Errorf("expected claimed action status %s, got %s", StatusRunning, claimedAction.Status)
+		}
+	}
+
+	// 验证其他 action 仍然是 approved
+	for _, id := range actionIDs {
+		if len(claimedIDs) > 0 && id == claimedIDs[0] {
+			continue
+		}
+		action, _ := repo.FindByID(ctx, id)
+		if action.Status != StatusApproved {
+			t.Errorf("action %d: expected status %s (not claimed), got %s", id, StatusApproved, action.Status)
+		}
 	}
 }

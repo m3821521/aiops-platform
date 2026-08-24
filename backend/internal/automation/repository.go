@@ -97,11 +97,16 @@ func (r *ActionRepository) FindRunningByTarget(ctx context.Context, targetType, 
 func (r *ActionRepository) MarkStaleRunningAsTimeout(ctx context.Context, threshold time.Duration) (int64, error) {
 	now := time.Now()
 	cutoff := now.Add(-threshold)
+	// P0-05.3: 显式括号，不依赖 SQL AND/OR precedence。
 	// 条件：
-	//   1. 有 lease 且已过期 (lease_expires_at IS NOT NULL AND lease_expires_at < NOW())
-	//   2. 无 lease 的旧数据且 updated_at < cutoff (lease_expires_at IS NULL AND updated_at < cutoff)
+	//   status = running
+	//   AND (
+	//     (lease_expires_at IS NOT NULL AND lease_expires_at < NOW())
+	//     OR
+	//     (lease_expires_at IS NULL AND updated_at < cutoff)
+	//   )
 	result := r.db.WithContext(ctx).Model(&Action{}).
-		Where("status = ? AND (lease_expires_at IS NOT NULL AND lease_expires_at < ?) OR (lease_expires_at IS NULL AND updated_at < ?)",
+		Where("status = ? AND ((lease_expires_at IS NOT NULL AND lease_expires_at < ?) OR (lease_expires_at IS NULL AND updated_at < ?))",
 			StatusRunning, now, cutoff).
 		Updates(map[string]interface{}{
 			"status":          StatusTimeout,
@@ -158,28 +163,50 @@ func (r *ActionRepository) UpdateStatusIfRunning(ctx context.Context, id int64, 
 	return result.RowsAffected == 1, nil
 }
 
-// ClaimForExecution P0-05 + P0-05.2: 原子地将 Action 从 approved 声明为 running，并设置 lease。
+// ClaimForExecution P0-05 + P0-05.2 + P0-05.4: 原子地将 Action 从 approved 声明为 running，并设置 lease。
 // 使用 CAS（WHERE status='approved'）防止并发重复执行（TOCTOU 竞态）。
 // 同时使用 NOT EXISTS 子查询原子检查同一 target 是否有其他 running action，防止资源并发。
+// P0-05.4: MySQL Error 1093 不允许在 UPDATE 的 FROM 子句中直接引用正在更新的表。
+// 使用子查询别名包装（NOT EXISTS (SELECT 1 FROM (SELECT ... FROM actions a2) AS sub)）绕过此限制。
+// 此方案在 MySQL 和 SQLite 上均兼容，且在多连接并发下通过行锁保证原子性。
 // 返回 (claimed bool, error)。claimed=true 表示成功获得执行权。
 func (r *ActionRepository) ClaimForExecution(ctx context.Context, id int64, leaseDuration time.Duration) (bool, error) {
 	now := time.Now()
 	leaseExpires := now.Add(leaseDuration)
-	// 原子 CAS + 资源并发检查：
+	// 原子 CAS + 资源并发检查（NOT EXISTS + 子查询别名包装，MySQL/SQLite 兼容）：
 	//   1. 当前 action 状态必须为 approved
 	//   2. 同一 cluster+target_type+target_name 不能有其他 running action
+	result := r.db.WithContext(ctx).Exec(`
+		UPDATE actions 
+		SET status=?, updated_at=?, lease_expires_at=?
+		WHERE id=? AND status=? AND NOT EXISTS (
+			SELECT 1 FROM (
+				SELECT 1 FROM actions a2 
+				WHERE a2.target_type = actions.target_type 
+				  AND a2.target_name = actions.target_name 
+				  AND a2.cluster = actions.cluster 
+				  AND a2.status = ? 
+				  AND a2.id != actions.id
+			) AS sub
+		)
+	`, StatusRunning, now, leaseExpires, id, StatusApproved, StatusRunning)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
+// RollbackClaim P0-05.3: Execution 创建失败时，用 CAS 将 Action 从 running 回滚到 approved。
+// 仅当当前状态为 running 时才回滚，防止覆盖其他状态。
+// 返回是否回滚成功（RowsAffected == 1）。
+func (r *ActionRepository) RollbackClaim(ctx context.Context, id int64) (bool, error) {
+	now := time.Now()
 	result := r.db.WithContext(ctx).Model(&Action{}).
-		Where("id = ? AND status = ? AND NOT EXISTS (?)",
-			id, StatusApproved,
-			r.db.Model(&Action{}).Select("1").Where(
-				"target_type = actions.target_type AND target_name = actions.target_name AND cluster = actions.cluster AND status = ? AND id != ?",
-				StatusRunning, id,
-			),
-		).
+		Where("id = ? AND status = ?", id, StatusRunning).
 		Updates(map[string]interface{}{
-			"status":           StatusRunning,
+			"status":           StatusApproved,
 			"updated_at":       now,
-			"lease_expires_at": leaseExpires,
+			"lease_expires_at": nil,
 		})
 	if result.Error != nil {
 		return false, result.Error

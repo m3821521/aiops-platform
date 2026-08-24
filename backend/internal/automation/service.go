@@ -272,8 +272,16 @@ func (s *Service) Execute(ctx context.Context, actionID, userID int64) (*Executi
 		CreatedAt: time.Now(),
 	}
 	if err := s.executions.Create(ctx, exec); err != nil {
-		// Execution 创建失败，回滚 action 状态为 approved
-		_ = s.actions.Update(ctx, action) // 简单回滚
+		// P0-05.3: Execution 创建失败，用 CAS 将 Action 从 running 回滚到 approved。
+		// 不能使用简单的 Update(action)，因为 action 已经是 RUNNING 状态。
+		rolledBack, rbErr := s.actions.RollbackClaim(ctx, actionID)
+		if rbErr != nil {
+			slog.Error("rollback claim after execution create failure failed",
+				"action_id", actionID, "error", rbErr)
+		} else if !rolledBack {
+			slog.Warn("rollback claim skipped (action status changed by another process)",
+				"action_id", actionID)
+		}
 		return nil, fmt.Errorf("创建 execution 记录失败: %w", err)
 	}
 

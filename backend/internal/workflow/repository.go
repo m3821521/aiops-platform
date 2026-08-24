@@ -87,8 +87,9 @@ func (r *Repository) FindStaleRunning(ctx context.Context, threshold time.Durati
 func (r *Repository) MarkStaleRunningAsFailed(ctx context.Context, threshold time.Duration) (int64, error) {
 	now := time.Now()
 	cutoff := now.Add(-threshold)
+	// P0-05.3: 显式括号，不依赖 SQL AND/OR precedence。
 	result := r.db.WithContext(ctx).Model(&Workflow{}).
-		Where("status = ? AND (lease_expires_at IS NOT NULL AND lease_expires_at < ?) OR (lease_expires_at IS NULL AND updated_at < ?)",
+		Where("status = ? AND ((lease_expires_at IS NOT NULL AND lease_expires_at < ?) OR (lease_expires_at IS NULL AND updated_at < ?))",
 			WorkflowStatusRunning, now, cutoff).
 		Updates(map[string]interface{}{
 			"status":           WorkflowStatusFailed,
