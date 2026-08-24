@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Table, Button, Modal, Form, Input, Select, Tag, Space, Popconfirm,
   message, Card, Row, Col, Statistic, Tooltip, Badge, Switch, Alert
@@ -6,7 +6,8 @@ import {
 import {
   PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined,
   PlayCircleOutlined, StopOutlined, ApiOutlined, KeyOutlined,
-  CheckCircleOutlined, CloseCircleOutlined, MinusCircleOutlined
+  CheckCircleOutlined, CloseCircleOutlined, MinusCircleOutlined,
+  WarningOutlined, ThunderboltOutlined
 } from '@ant-design/icons';
 import { connectionApi, credentialApi } from '../../api/connection';
 import type { ConnectionView, Credential, TestConnectionResult } from '../../api/connection';
@@ -61,21 +62,40 @@ export default function ExternalConnections() {
   const [connectionForm] = Form.useForm();
   const [credentialForm] = Form.useForm();
 
+  // P1-PRODUCT-05: 数据新鲜度状态
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [healthChecking, setHealthChecking] = useState(false);
+  const [healthCheckError, setHealthCheckError] = useState<string | null>(null);
+  const pollingRef = useRef<number | null>(null);
+
   useEffect(() => {
     loadConnections();
     loadCredentials();
+    // 页面进入后自动触发一次健康检查
+    triggerHealthCheck();
+    // 30s 前端轮询：只 GET list，不触发 TestConnection
+    pollingRef.current = window.setInterval(() => {
+      loadConnections(true); // silent refresh
+    }, 30000);
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
   }, [page, pageSize]);
 
-  const loadConnections = async () => {
-    setLoading(true);
+  const loadConnections = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const res = await connectionApi.list({ page, page_size: pageSize });
       setConnections(res.items || []);
       setTotal(res.total || 0);
+      setLastUpdated(new Date());
+      setHealthCheckError(null);
     } catch (err: any) {
-      message.error('加载连接列表失败: ' + (err.response?.data?.message || err.message));
+      if (!silent) {
+        message.error('加载连接列表失败: ' + (err.response?.data?.message || err.message));
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -162,6 +182,50 @@ export default function ExternalConnections() {
     }
   };
 
+  // P1-PRODUCT-05: 批量健康检查（立即对所有 enabled 连接执行真实探活）
+  const triggerHealthCheck = async () => {
+    if (healthChecking) return;
+    setHealthChecking(true);
+    setHealthCheckError(null);
+    try {
+      const res = await connectionApi.healthCheck();
+      if (res.unavailable > 0) {
+        message.warning(`健康检查完成：${res.available} 个可用，${res.unavailable} 个不可用`);
+      } else {
+        message.success(`健康检查完成：全部 ${res.available} 个连接可用`);
+      }
+      loadConnections();
+    } catch (err: any) {
+      const msg = err.response?.data?.message || err.message || '未知错误';
+      setHealthCheckError(msg);
+      message.error('健康检查失败: ' + msg);
+    } finally {
+      setHealthChecking(false);
+    }
+  };
+
+  // P1-PRODUCT-05: 判断连接状态新鲜度
+  const STALE_THRESHOLD = 5 * 60 * 1000; // 5 分钟
+  const getConnectionFreshness = (record: ConnectionView): 'fresh' | 'stale' | 'never' => {
+    if (!record.last_check_at) return 'never';
+    const checkTime = new Date(record.last_check_at).getTime();
+    if (isNaN(checkTime)) return 'never';
+    return Date.now() - checkTime > STALE_THRESHOLD ? 'stale' : 'fresh';
+  };
+
+  const formatLastCheck = (time?: string): string => {
+    if (!time) return '未验证';
+    const checkTime = new Date(time);
+    if (isNaN(checkTime.getTime())) return '未验证';
+    const diff = Date.now() - checkTime.getTime();
+    const minutes = Math.floor(diff / 60000);
+    if (minutes < 1) return '刚刚';
+    if (minutes < 60) return `${minutes} 分钟前`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours} 小时前`;
+    return checkTime.toLocaleString('zh-CN');
+  };
+
   const handleCreateCredential = () => {
     credentialForm.resetFields();
     setCredentialModalVisible(true);
@@ -203,7 +267,26 @@ export default function ExternalConnections() {
     return found?.color || 'default';
   };
 
-  const getStatusTag = (status: string) => {
+  const getStatusTag = (status: string, record?: ConnectionView) => {
+    const freshness = record ? getConnectionFreshness(record) : 'fresh';
+    if (freshness === 'never') {
+      return (
+        <Space direction="vertical" size={0}>
+          <Tag icon={<MinusCircleOutlined />} color="default">未验证</Tag>
+        </Space>
+      );
+    }
+    if (freshness === 'stale') {
+      // 状态已过期：显示警告，保留最近一次真实结果
+      const lastStatus = status === 'available' ? '可用' : status === 'unavailable' ? '不可用' : '未知';
+      return (
+        <Space direction="vertical" size={0}>
+          <Tag icon={<WarningOutlined />} color="warning">状态已过期</Tag>
+          <span style={{ fontSize: 11, color: '#8c8c8c' }}>上次: {lastStatus}</span>
+        </Space>
+      );
+    }
+    // fresh 状态
     switch (status) {
       case 'available':
         return <Tag icon={<CheckCircleOutlined />} color="success">可用</Tag>;
@@ -253,7 +336,7 @@ export default function ExternalConnections() {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      render: (status: string) => getStatusTag(status),
+      render: (status: string, record: ConnectionView) => getStatusTag(status, record),
     },
     {
       title: '启用',
@@ -271,7 +354,23 @@ export default function ExternalConnections() {
       title: '最后检查',
       dataIndex: 'last_check_at',
       key: 'last_check_at',
-      render: (time?: string) => time ? new Date(time).toLocaleString('zh-CN') : '-',
+      render: (time?: string, record?: ConnectionView) => {
+        const freshness = record ? getConnectionFreshness(record) : 'never';
+        if (freshness === 'never') {
+          return <span style={{ color: '#8c8c8c' }}>未验证</span>;
+        }
+        const color = freshness === 'stale' ? '#faad14' : '#52c41a';
+        return (
+          <Space direction="vertical" size={0}>
+            <span style={{ color, fontSize: 12 }}>{formatLastCheck(time)}</span>
+            {record?.last_error && freshness !== 'stale' && (
+              <Tooltip title={record.last_error}>
+                <span style={{ fontSize: 11, color: '#ff4d4f', cursor: 'pointer' }}>查看错误</span>
+              </Tooltip>
+            )}
+          </Space>
+        );
+      },
     },
     {
       title: '操作',
@@ -352,19 +451,50 @@ export default function ExternalConnections() {
       <Card
         title="外部连接管理"
         extra={
-          <Space>
+          <Space wrap>
             <Button icon={<KeyOutlined />} onClick={handleCreateCredential}>
               管理凭证
             </Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={handleCreateConnection}>
               新建连接
             </Button>
-            <Button icon={<ReloadOutlined />} onClick={loadConnections}>
-              刷新
+            <Button
+              icon={<ThunderboltOutlined />}
+              onClick={triggerHealthCheck}
+              loading={healthChecking}
+            >
+              立即检查状态
+            </Button>
+            <Button icon={<ReloadOutlined />} onClick={() => loadConnections()}>
+              刷新列表
             </Button>
           </Space>
         }
       >
+        {/* P1-PRODUCT-05: 数据新鲜度提示 */}
+        <div style={{ marginBottom: 16, padding: '8px 12px', background: '#fafafa', borderRadius: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          <Space size="middle">
+            <span style={{ fontSize: 12, color: '#595959' }}>
+              <ApiOutlined /> 数据状态：
+              {healthChecking ? (
+                <span style={{ color: '#1890ff' }}>正在检查连接状态…</span>
+              ) : lastUpdated ? (
+                <span style={{ color: '#52c41a' }}>已更新 · {formatLastCheck(lastUpdated.toISOString())}</span>
+              ) : (
+                <span style={{ color: '#8c8c8c' }}>未加载</span>
+              )}
+            </span>
+            <span style={{ fontSize: 12, color: '#8c8c8c' }}>
+              自动检查周期：5 分钟（后端）· 列表刷新：30 秒（前端）
+            </span>
+          </Space>
+          {healthCheckError && (
+            <span style={{ fontSize: 12, color: '#ff4d4f' }}>
+              上次检查失败：{healthCheckError}
+            </span>
+          )}
+        </div>
+
         <Table
           scroll={{ x: 'max-content' }}
           columns={columns}

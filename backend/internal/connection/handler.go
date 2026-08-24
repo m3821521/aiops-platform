@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/aiops/aiops-platform/pkg/response"
@@ -16,6 +17,7 @@ type Handler struct {
 	credentialService *CredentialService
 	connectionManager *ConnectionManager
 	providerRegistry  *ProviderRegistry
+	healthChecker     *HealthChecker
 }
 
 // NewHandler 创建 Handler。
@@ -31,6 +33,11 @@ func NewHandler(
 		connectionManager: connectionManager,
 		providerRegistry:  providerRegistry,
 	}
+}
+
+// SetHealthChecker 注入健康检查器（可选，用于 Batch Health Check API）。
+func (h *Handler) SetHealthChecker(checker *HealthChecker) {
+	h.healthChecker = checker
 }
 
 // ============================================================================
@@ -358,8 +365,43 @@ func (h *Handler) DeleteCredential(c *gin.Context) {
 }
 
 // ============================================================================
-// 辅助函数
+// Health Check
 // ============================================================================
+
+// BatchHealthCheck 处理 POST /api/v1/connections/health-check
+// 立即对所有 enabled 的 Connection 执行真实健康检查。
+// 返回检查结果，不包含任何 credential / password / token 信息。
+func (h *Handler) BatchHealthCheck(c *gin.Context) {
+	if h.healthChecker == nil {
+		response.Internal(c, "health checker 未初始化")
+		return
+	}
+
+	slog.Info("batch health check triggered", "user_id", getUserID(c))
+
+	results := h.healthChecker.CheckAll(c.Request.Context())
+	if results == nil {
+		results = []HealthCheckResult{}
+	}
+
+	available := 0
+	unavailable := 0
+	for _, r := range results {
+		if r.Status == StatusAvailable {
+			available++
+		} else if r.Status == StatusUnavailable {
+			unavailable++
+		}
+	}
+
+	response.OK(c, gin.H{
+		"items":       results,
+		"total":       len(results),
+		"available":   available,
+		"unavailable": unavailable,
+		"checked_at":  time.Now(),
+	})
+}
 
 // getUserID 从 Gin Context 获取当前用户 ID。
 func getUserID(c *gin.Context) int64 {

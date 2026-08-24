@@ -209,6 +209,7 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 			v1.POST("/connections/:id/enable", auth.RequirePermission("connection", "write"), deps.Connection.EnableConnection)
 			v1.POST("/connections/:id/disable", auth.RequirePermission("connection", "write"), deps.Connection.DisableConnection)
 			v1.POST("/connections/:id/test", auth.RequirePermission("connection", "write"), deps.Connection.TestConnection)
+			v1.POST("/connections/health-check", auth.RequirePermission("connection", "write"), deps.Connection.BatchHealthCheck)
 
 			// Credential CRUD
 			v1.GET("/credentials", deps.Connection.ListCredentials)

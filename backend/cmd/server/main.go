@@ -299,6 +299,18 @@ func main() {
 
 	// Connection Handler
 	connectionHandler := connection.NewHandler(connectionService, credentialService, connectionManager, providerRegistry)
+
+	// P1-PRODUCT-05: Connection 周期健康检查器
+	// 默认 5 分钟检查周期，15 秒单 Provider 超时，4 并发
+	connectionHealthChecker := connection.NewHealthChecker(
+		connectionRepo,
+		providerRegistry,
+		5*time.Minute,
+		15*time.Second,
+		4,
+	)
+	connectionHandler.SetHealthChecker(connectionHealthChecker)
+	connectionHealthChecker.Start(context.Background())
 	slog.Info("connection & credential manager initialized")
 
 	clusterSvc := cluster.NewService(mgr)

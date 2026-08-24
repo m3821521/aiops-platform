@@ -81,6 +81,24 @@ export const connectionApi = {
   test: (id: number) =>
     request.post<any, TestConnectionResult>(`/api/v1/connections/${id}/test`),
 
+  // 批量健康检查（立即对所有 enabled 连接执行真实探活）
+  healthCheck: () =>
+    request.post<any, {
+      items: Array<{
+        id: number
+        name: string
+        type: string
+        status: string
+        checked_at: string
+        error?: string
+        latency_ms: number
+      }>
+      total: number
+      available: number
+      unavailable: number
+      checked_at: string
+    }>('/api/v1/connections/health-check'),
+
   // 支持的类型
   types: () =>
     request.get<any, { types: Array<{ type: string; registered: boolean }> }>('/api/v1/connections/types'),
