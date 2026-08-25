@@ -1,0 +1,55 @@
+# P1-X.10 Phase 2.1: Root .dockerignore for unified single-port build
+# Build context = project root, so exclude unnecessary files.
+
+# Git
+.git
+.gitignore
+.github
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node dependencies and build output (rebuilt in Docker)
+frontend/node_modules
+frontend/dist
+frontend/dist-ssr
+
+# Go build output
+backend/bin
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test coverage
+coverage.out
+coverage.html
+
+# Sensitive config (injected via env/secret)
+.env
+.env.local
+.env.*.local
+backend/configs/config.yaml
+backend/configs/clusters.yaml
+*.pem
+*.key
+*.crt
+kubeconfig
+credentials
+
+# Logs
+*.log
+logs/
+
+# Temp
+tmp/
+temp/
+*.tmp

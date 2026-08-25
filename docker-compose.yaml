@@ -117,8 +117,9 @@ services:
 
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      # P1-X.10 Phase 2.1: build context = project root, so Dockerfile can access both frontend/ and backend/
+      context: .
+      dockerfile: ./backend/Dockerfile
     depends_on:
       mysql:
         condition: service_healthy
@@ -129,9 +130,12 @@ services:
       elasticsearch:
         condition: service_healthy
     ports:
+      # P1-X.10 Phase 2: Single port. Go server serves both API and React SPA on :8080.
       - "8080:8080"
     environment:
       CONFIG_PATH: /app/configs/config.yaml
+      # FRONTEND_DIST_DIR is already set in Dockerfile, but can be overridden here.
+      FRONTEND_DIST_DIR: /app/frontend/dist
     volumes:
       - ./backend/configs/config.docker.yaml:/app/configs/config.yaml:ro
       - ./backend/configs/clusters.example.yaml:/app/configs/clusters.yaml:ro
@@ -143,22 +147,10 @@ services:
     networks:
       - aiops-net
 
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    depends_on:
-      backend:
-        condition: service_healthy
-    ports:
-      - "80:8080"
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - aiops-net
+  # P1-X.10 Phase 2.1: frontend service REMOVED.
+  # Production now uses single-port architecture: Go backend on :8080 serves React dist directly.
+  # Nginx frontend service is no longer needed.
+  # Development mode still uses Vite Dev Server (:5173) + Vite Proxy → backend (:8080).
 
 volumes:
   mysql-data:
