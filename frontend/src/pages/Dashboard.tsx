@@ -28,6 +28,7 @@ import type {
 import dayjs from 'dayjs'
 import { useDataTrust } from '@/hooks/useDataTrust'
 import { DataTrustIndicator } from '@/components/DataTrustIndicator'
+import { extractProvenance } from '@/utils/provenance'
 
 const { Title, Text } = Typography
 
@@ -170,7 +171,7 @@ export default function Dashboard() {
       .then((res) => {
         if (token === refreshTokenRef.current) {
           setIncidents(res.items || [])
-          incidentTrust.markSuccess(incSeq)
+          incidentTrust.markSuccess(incSeq, extractProvenance(res))
         }
       })
       .catch((err) => {
@@ -186,7 +187,7 @@ export default function Dashboard() {
         if (token !== refreshTokenRef.current) return
         const actionList = res.items || []
         setActions(actionList)
-        actionTrust.markSuccess(actSeq)
+        actionTrust.markSuccess(actSeq, extractProvenance(res))
         // 对 success Action 加载 executions 获取 Verification（限制数量，避免 N+1 限流）
         const successActions = actionList.filter((a) => a.status === 'success').slice(0, 5)
         const execResults = await Promise.allSettled(
@@ -212,7 +213,7 @@ export default function Dashboard() {
       .then((res) => {
         if (token === refreshTokenRef.current) {
           setWorkflows(res.items || [])
-          workflowTrust.markSuccess(wfSeq)
+          workflowTrust.markSuccess(wfSeq, extractProvenance(res))
         }
       })
       .catch((err: any) => {
@@ -570,11 +571,12 @@ export default function Dashboard() {
         <DataTrustIndicator
           status={dashboardTrustStatus}
           lastSuccessfulAt={dashboardLastSuccessful}
-          ageSeconds={dashboardAge}
+          fetchAgeSeconds={dashboardAge}
           sourceLabel="Multiple Sources"
           error={dashboardError}
-          formatAge={() => dashboardAge !== undefined ? (dashboardAge < 60 ? `${dashboardAge}s` : `${Math.floor(dashboardAge / 60)}m ${dashboardAge % 60}s`) : 'N/A'}
+          formatFetchAge={() => dashboardAge !== undefined ? (dashboardAge < 60 ? `${dashboardAge}s` : `${Math.floor(dashboardAge / 60)}m ${dashboardAge % 60}s`) : 'N/A'}
           formatLastSuccessful={() => dashboardLastSuccessful ? dashboardLastSuccessful.toLocaleTimeString('zh-CN', { hour12: false }) : 'Never'}
+          dataTimestampAvailable={false}
         />
       </div>
 

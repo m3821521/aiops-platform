@@ -13,6 +13,7 @@ import { jenkinsApi } from '@/api/jenkins'
 import { argocdApi } from '@/api/argocd'
 import IncidentDetail from '@/pages/AIOps/IncidentDetail'
 import { useDataTrust } from '@/hooks/useDataTrust'
+import { extractProvenance } from '@/utils/provenance'
 import { DataTrustIndicator } from '@/components/DataTrustIndicator'
 
 const { Text } = Typography
@@ -113,7 +114,7 @@ export default function AutomationActions() {
         page,
         page_size: pageSize,
       })
-      trust.markSuccess(seq)
+      trust.markSuccess(seq, extractProvenance(res))
       setActions(res.items)
       setTotal(res.total)
     } catch (e: any) {
@@ -494,11 +495,14 @@ export default function AutomationActions() {
           <DataTrustIndicator
             status={trust.status}
             lastSuccessfulAt={trust.lastSuccessfulAt}
-            ageSeconds={trust.ageSeconds}
+            fetchAgeSeconds={trust.fetchAgeSeconds}
             sourceLabel={trust.sourceLabel}
             error={trust.error}
-            formatAge={trust.formatAge}
+            formatFetchAge={trust.formatFetchAge}
             formatLastSuccessful={trust.formatLastSuccessful}
+            dataAgeSeconds={trust.dataAgeSeconds}
+            dataTimestampAvailable={trust.dataTimestampAvailable}
+            provenance={trust.provenance}
           />
         </div>
         <Table

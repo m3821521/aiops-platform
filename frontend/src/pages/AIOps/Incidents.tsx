@@ -8,6 +8,7 @@ import type { Incident, PageResult } from '@/types'
 import dayjs from 'dayjs'
 import IncidentDetail from './IncidentDetail'
 import { useDataTrust } from '@/hooks/useDataTrust'
+import { extractProvenance } from '@/utils/provenance'
 import { DataTrustIndicator } from '@/components/DataTrustIndicator'
 
 const severityColor: Record<string, string> = {
@@ -55,7 +56,7 @@ export default function Incidents() {
       if (namespaceFilter) params.namespace = namespaceFilter
       if (keyword) params.keyword = keyword
       const res = await incidentApi.list(params)
-      trust.markSuccess(seq)
+      trust.markSuccess(seq, extractProvenance(res))
       setData(res)
     } catch (err: any) {
       trust.markError(seq, err?.message || '加载事件列表失败')
@@ -219,11 +220,14 @@ export default function Incidents() {
           <DataTrustIndicator
             status={trust.status}
             lastSuccessfulAt={trust.lastSuccessfulAt}
-            ageSeconds={trust.ageSeconds}
+            fetchAgeSeconds={trust.fetchAgeSeconds}
             sourceLabel={trust.sourceLabel}
             error={trust.error}
-            formatAge={trust.formatAge}
+            formatFetchAge={trust.formatFetchAge}
             formatLastSuccessful={trust.formatLastSuccessful}
+            dataAgeSeconds={trust.dataAgeSeconds}
+            dataTimestampAvailable={trust.dataTimestampAvailable}
+            provenance={trust.provenance}
           />
         </div>
         {trust.error && trust.status === 'stale' && (

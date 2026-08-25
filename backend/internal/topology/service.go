@@ -48,41 +48,96 @@ func (s *Service) cacheKey(cluster, namespace string) string {
 	return "topology:" + cluster + ":" + namespace
 }
 
+// cacheEnvelope 是 Redis 缓存的内部包装结构，包含 Graph 和缓存创建时间。
+// 用于 provenance：cacheCreatedAt 真实来自缓存写入时间，禁止伪造。
+type cacheEnvelope struct {
+	Graph     Graph     `json:"graph"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// CacheProvenance 描述拓扑图的缓存来源信息。
+type CacheProvenance struct {
+	// Hit 是否命中 Redis cache
+	Hit bool
+	// CreatedAt 缓存创建时间（来自 envelope），legacy cache 或无法获得时为 nil
+	CreatedAt *time.Time
+	// ExpiresAt 缓存过期时间（由 Redis TTL 推算：now + TTL），无法获得时为 nil
+	ExpiresAt *time.Time
+	// Legacy 是否为旧格式缓存（纯 Graph JSON，无 envelope）
+	Legacy bool
+}
+
 // GetGraph 获取拓扑图，支持 Redis 缓存。
 // refresh=true 时跳过缓存。
 func (s *Service) GetGraph(ctx context.Context, cluster, namespace string, refresh bool) (*Graph, error) {
+	graph, _, err := s.GetGraphWithProvenance(ctx, cluster, namespace, refresh)
+	return graph, err
+}
+
+// GetGraphWithProvenance 获取拓扑图并返回缓存 provenance。
+// provenance 真实描述数据来源（cache hit/miss, cacheCreatedAt, cacheExpiresAt）。
+func (s *Service) GetGraphWithProvenance(ctx context.Context, cluster, namespace string, refresh bool) (*Graph, *CacheProvenance, error) {
 	cacheKey := s.cacheKey(cluster, namespace)
+	prov := &CacheProvenance{}
 
 	// 尝试从缓存读取。
 	if !refresh && s.rdb != nil {
 		if data, err := s.rdb.Get(ctx, cacheKey).Bytes(); err == nil {
+			// 优先尝试解析 envelope（新格式）。
+			var env cacheEnvelope
+			if json.Unmarshal(data, &env) == nil && env.Graph.Cluster != "" {
+				prov.Hit = true
+				createdAt := env.CreatedAt
+				prov.CreatedAt = &createdAt
+				// 从 Redis TTL 推算过期时间。
+				if ttl, ttlErr := s.rdb.TTL(ctx, cacheKey).Result(); ttlErr == nil && ttl > 0 {
+					expiresAt := time.Now().Add(ttl)
+					prov.ExpiresAt = &expiresAt
+				}
+				s.enrichStatus(ctx, &env.Graph)
+				return &env.Graph, prov, nil
+			}
+			// legacy cache：纯 Graph JSON。
 			var graph Graph
 			if json.Unmarshal(data, &graph) == nil {
+				prov.Hit = true
+				prov.Legacy = true
+				// CreatedAt 无法获得，保持 nil（禁止伪造）。
+				if ttl, ttlErr := s.rdb.TTL(ctx, cacheKey).Result(); ttlErr == nil && ttl > 0 {
+					expiresAt := time.Now().Add(ttl)
+					prov.ExpiresAt = &expiresAt
+				}
 				s.enrichStatus(ctx, &graph)
-				return &graph, nil
+				return &graph, prov, nil
 			}
 		}
 	}
 
-	// 从 Kubernetes 构建。
+	// 从 Kubernetes 构建（cache miss 或 refresh）。
 	graph, err := s.builder.Build(ctx, cluster, namespace)
 	if err != nil {
-		return nil, err
+		return nil, prov, err
 	}
 
-	// 写入缓存。
+	// 写入缓存（使用 envelope 包装，记录真实创建时间）。
 	if s.rdb != nil {
-		if data, err := json.Marshal(graph); err == nil {
+		env := cacheEnvelope{Graph: *graph, CreatedAt: time.Now()}
+		if data, err := json.Marshal(env); err == nil {
 			if err := s.rdb.Set(ctx, cacheKey, data, s.cacheTTL).Err(); err != nil {
 				slog.Warn("topology: cache set failed", "err", err)
+			} else {
+				createdAt := env.CreatedAt
+				prov.CreatedAt = &createdAt
+				expiresAt := time.Now().Add(s.cacheTTL)
+				prov.ExpiresAt = &expiresAt
 			}
 		}
 	}
 
-	//  enrich 状态。
+	// enrich 状态。
 	s.enrichStatus(ctx, graph)
 
-	return graph, nil
+	return graph, prov, nil
 }
 
 // enrichStatus 用 Incident/Alert/Anomaly 数据丰富节点状态。

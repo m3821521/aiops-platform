@@ -10,6 +10,7 @@ import { workflowApi, type Workflow, type WorkflowExecution } from '@/api/workfl
 import WorkflowExecutionDetail from './WorkflowExecutionDetail'
 import IncidentDetail from '@/pages/AIOps/IncidentDetail'
 import { useDataTrust } from '@/hooks/useDataTrust'
+import { extractProvenance } from '@/utils/provenance'
 import { DataTrustIndicator } from '@/components/DataTrustIndicator'
 
 const statusColor: Record<string, string> = {
@@ -63,7 +64,7 @@ export default function Workflows() {
     setLoading(true)
     try {
       const res = await workflowApi.list({ page, page_size: pageSize })
-      trust.markSuccess(seq)
+      trust.markSuccess(seq, extractProvenance(res))
       setItems(res.items)
       setTotal(res.total)
     } catch (e: any) {
@@ -220,11 +221,14 @@ export default function Workflows() {
           <DataTrustIndicator
             status={trust.status}
             lastSuccessfulAt={trust.lastSuccessfulAt}
-            ageSeconds={trust.ageSeconds}
+            fetchAgeSeconds={trust.fetchAgeSeconds}
             sourceLabel={trust.sourceLabel}
             error={trust.error}
-            formatAge={trust.formatAge}
+            formatFetchAge={trust.formatFetchAge}
             formatLastSuccessful={trust.formatLastSuccessful}
+            dataAgeSeconds={trust.dataAgeSeconds}
+            dataTimestampAvailable={trust.dataTimestampAvailable}
+            provenance={trust.provenance}
           />
         </div>
         <Table

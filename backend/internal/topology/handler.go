@@ -2,6 +2,7 @@ package topology
 
 import (
 	"strconv"
+	"time"
 
 	"github.com/aiops/aiops-platform/pkg/response"
 	"github.com/gin-gonic/gin"
@@ -14,6 +15,7 @@ type Handler struct {
 
 // GetGraph 处理 GET /api/v1/topology
 // 查询参数：cluster, namespace, refresh
+// 返回带 meta.provenance 的响应，真实描述 cache hit/miss 和缓存时间。
 func (h *Handler) GetGraph(c *gin.Context) {
 	if h.Service == nil {
 		response.Internal(c, "topology service not initialized")
@@ -24,12 +26,29 @@ func (h *Handler) GetGraph(c *gin.Context) {
 	namespace := c.Query("namespace")
 	refresh := c.Query("refresh") == "true"
 
-	graph, err := h.Service.GetGraph(c.Request.Context(), cluster, namespace, refresh)
+	graph, cacheProv, err := h.Service.GetGraphWithProvenance(c.Request.Context(), cluster, namespace, refresh)
 	if err != nil {
 		response.ServiceUnavailable(c, "拓扑服务不可用（Kubernetes 连接失败）: "+err.Error())
 		return
 	}
-	response.OK(c, graph)
+
+	// 构建真实 provenance。
+	fetchedAt := time.Now()
+	sourceType := "kubernetes+prometheus"
+	if cacheProv.Hit {
+		sourceType = "redis-cache"
+	}
+	prov := &response.Provenance{
+		Source:              "topology",
+		SourceType:          sourceType,
+		FetchedAt:           &fetchedAt,
+		CacheHit:            cacheProv.Hit,
+		CacheCreatedAt:      cacheProv.CreatedAt,
+		CacheExpiresAt:      cacheProv.ExpiresAt,
+		TimestampAvailable:  false,
+		TimestampSemantics:  "topology graph has no intrinsic data timestamp; fetchedAt is backend acquisition time",
+	}
+	response.OKWithProvenance(c, graph, prov)
 }
 
 // GetNode 处理 GET /api/v1/topology/nodes/:type/:name

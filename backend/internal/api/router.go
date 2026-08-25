@@ -148,7 +148,7 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 
 		if deps.Alert != nil {
 			// P0-01: webhook 已在 publicV1 注册，此处不重复注册。
-			v1.GET("/alerts", deps.Alert.List)
+			v1.GET("/alerts", deps.Alert.ListWithProvenance)
 			v1.GET("/alerts/aggregate", deps.Alert.Aggregate)
 			v1.GET("/alerts/noise", deps.Alert.Reduce)
 			v1.GET("/alerts/:id", deps.Alert.Get)
@@ -295,7 +295,7 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 		}
 
 		if deps.Incident != nil {
-			v1.GET("/incidents", deps.Incident.List)
+			v1.GET("/incidents", deps.Incident.ListWithProvenance)
 			v1.GET("/incidents/:id", deps.Incident.Get)
 			v1.POST("/incidents/:id/acknowledge", auth.RequirePermission("incidents", "write"), deps.Incident.Acknowledge)
 			v1.POST("/incidents/:id/resolve", auth.RequirePermission("incidents", "write"), deps.Incident.Resolve)

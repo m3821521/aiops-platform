@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"strconv"
+	"time"
 
 	"github.com/aiops/aiops-platform/internal/auth"
 	"github.com/aiops/aiops-platform/pkg/response"
@@ -69,7 +70,29 @@ func (h *Handler) List(c *gin.Context) {
 		response.Internal(c, err.Error())
 		return
 	}
-	response.OK(c, gin.H{"items": items, "total": total, "page": page, "page_size": pageSize})
+
+	var sourceUpdatedAt time.Time
+	hasUpdated := false
+	for i := range items {
+		if !hasUpdated || items[i].UpdatedAt.After(sourceUpdatedAt) {
+			sourceUpdatedAt = items[i].UpdatedAt
+			hasUpdated = true
+		}
+	}
+
+	fetchedAt := time.Now()
+	prov := &response.Provenance{
+		Source:             "mysql",
+		SourceType:         "mysql",
+		FetchedAt:          &fetchedAt,
+		TimestampAvailable: false,
+		TimestampSemantics: "latest_record_updated_at",
+	}
+	if hasUpdated {
+		su := sourceUpdatedAt
+		prov.SourceUpdatedAt = &su
+	}
+	response.OKWithProvenance(c, gin.H{"items": items, "total": total, "page": page, "page_size": pageSize}, prov)
 }
 
 func (h *Handler) Get(c *gin.Context) {

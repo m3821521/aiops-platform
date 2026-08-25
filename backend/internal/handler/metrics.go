@@ -7,6 +7,7 @@ import (
 	"github.com/aiops/aiops-platform/internal/monitoring"
 	"github.com/aiops/aiops-platform/pkg/response"
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/common/model"
 )
 
 // namespaceRe 校验 Kubernetes namespace 格式（DNS-1123 label）。
@@ -17,9 +18,63 @@ type MetricsHandler struct {
 	Prom monitoring.Querier
 }
 
+// extractLatestSampleTimestamp 从 Prometheus QueryResult 中提取最新的 sample timestamp。
+// 真实来自 Prometheus 协议，禁止伪造。
+// 返回 (timestamp, available)：available=false 表示无有效 sample。
+func extractLatestSampleTimestamp(result *monitoring.QueryResult) (time.Time, bool) {
+	if result == nil || result.Result == nil {
+		return time.Time{}, false
+	}
+
+	var latest model.Time
+	found := false
+
+	switch v := result.Result.(type) {
+	case model.Vector:
+		for _, sample := range v {
+			if sample.Timestamp > latest {
+				latest = sample.Timestamp
+				found = true
+			}
+		}
+	case model.Matrix:
+		for _, stream := range v {
+			for _, pair := range stream.Values {
+				if pair.Timestamp > latest {
+					latest = pair.Timestamp
+					found = true
+				}
+			}
+		}
+	case *model.Scalar:
+		if v != nil {
+			latest = v.Timestamp
+			found = true
+		}
+	case model.Scalar:
+		latest = v.Timestamp
+		found = true
+	case *model.String:
+		if v != nil {
+			latest = v.Timestamp
+			found = true
+		}
+	case model.String:
+		latest = v.Timestamp
+		found = true
+	}
+
+	if !found {
+		return time.Time{}, false
+	}
+	// model.Time 是毫秒级 Unix 时间戳。
+	return time.Unix(0, int64(latest)*int64(time.Millisecond)).UTC(), true
+}
+
 // Query 处理 GET /api/v1/metrics/query?query=<promql>&time=<rfc3339>
 // query: 必填，PromQL 表达式
 // time:  可选，RFC3339 时间点，不传则 Prometheus 使用当前时间
+// 返回带 meta.provenance 的响应，dataTimestamp 真实来自 Prometheus sample timestamp。
 func (h *MetricsHandler) Query(c *gin.Context) {
 	query := c.Query("query")
 	if query == "" {
@@ -42,7 +97,22 @@ func (h *MetricsHandler) Query(c *gin.Context) {
 		response.Internal(c, "Prometheus 查询失败: "+err.Error())
 		return
 	}
-	response.OK(c, result)
+
+	// 构建真实 provenance。
+	fetchedAt := time.Now()
+	prov := &response.Provenance{
+		Source:             "prometheus",
+		SourceType:         "provider",
+		FetchedAt:          &fetchedAt,
+		TimestampAvailable: false,
+		TimestampSemantics: "latest_prometheus_sample_timestamp",
+	}
+	if dataTS, ok := extractLatestSampleTimestamp(result); ok {
+		tsCopy := dataTS
+		prov.DataTimestamp = &tsCopy
+		prov.TimestampAvailable = true
+	}
+	response.OKWithProvenance(c, result, prov)
 }
 
 // QueryRange 处理 GET /api/v1/metrics/range?query=<promql>&start=<rfc3339>&end=<rfc3339>&step=<duration>
@@ -50,6 +120,7 @@ func (h *MetricsHandler) Query(c *gin.Context) {
 // start: 必填，范围起始时间，RFC3339
 // end:   必填，范围结束时间，RFC3339
 // step:  必填，数据点间隔，如 15s、1m、5m
+// 返回带 meta.provenance 的响应，dataTimestamp = range 内最新 sample timestamp。
 func (h *MetricsHandler) QueryRange(c *gin.Context) {
 	query := c.Query("query")
 	if query == "" {
@@ -78,7 +149,21 @@ func (h *MetricsHandler) QueryRange(c *gin.Context) {
 		response.Internal(c, "Prometheus 范围查询失败: "+err.Error())
 		return
 	}
-	response.OK(c, result)
+
+	fetchedAt := time.Now()
+	prov := &response.Provenance{
+		Source:             "prometheus",
+		SourceType:         "provider",
+		FetchedAt:          &fetchedAt,
+		TimestampAvailable: false,
+		TimestampSemantics: "latest_prometheus_sample_timestamp_in_range",
+	}
+	if dataTS, ok := extractLatestSampleTimestamp(result); ok {
+		tsCopy := dataTS
+		prov.DataTimestamp = &tsCopy
+		prov.TimestampAvailable = true
+	}
+	response.OKWithProvenance(c, result, prov)
 }
 
 // ListNodes 处理 GET /api/v1/metrics/nodes

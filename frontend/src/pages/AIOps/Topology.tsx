@@ -24,6 +24,7 @@ import type { TopologyGraph, TopologyNode, TopologyNodeType, TopologyNodeStatus 
 const { Text } = Typography
 
 import { useDataTrust } from '@/hooks/useDataTrust'
+import { extractProvenance } from '@/utils/provenance'
 import { DataTrustIndicator } from '@/components/DataTrustIndicator'
 
 const nodeColor: Record<TopologyNodeType, string> = {
@@ -83,7 +84,7 @@ export default function Topology() {
     setLoading(true)
     try {
       const data = await topologyApi.getGraph({ cluster, namespace: namespace || undefined, refresh: true })
-      trust.markSuccess(seq)
+      trust.markSuccess(seq, extractProvenance(data))
       setGraph(data)
     } catch (e: any) {
       trust.markError(seq, e?.message || '获取拓扑数据失败')
@@ -240,7 +241,7 @@ export default function Topology() {
             )}
             {trust.lastSuccessfulAt && (
               <Text type="secondary" style={{ fontSize: 12 }}>
-                · {trust.formatAge()} · 自动刷新 30s
+                · {trust.formatFetchAge()} · 自动刷新 30s
               </Text>
             )}
           </Space>
@@ -255,11 +256,14 @@ export default function Topology() {
           <DataTrustIndicator
             status={trust.status}
             lastSuccessfulAt={trust.lastSuccessfulAt}
-            ageSeconds={trust.ageSeconds}
+            fetchAgeSeconds={trust.fetchAgeSeconds}
             sourceLabel={trust.sourceLabel}
             error={trust.error}
-            formatAge={trust.formatAge}
+            formatFetchAge={trust.formatFetchAge}
             formatLastSuccessful={trust.formatLastSuccessful}
+            dataAgeSeconds={trust.dataAgeSeconds}
+            dataTimestampAvailable={trust.dataTimestampAvailable}
+            provenance={trust.provenance}
           />
         </div>
         <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>

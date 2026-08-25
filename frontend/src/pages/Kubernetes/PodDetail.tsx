@@ -13,6 +13,7 @@ import { usePermission } from '@/utils/permission'
 import type { Pod, PodDetail as PodDetailType, Container } from '@/types'
 import dayjs from 'dayjs'
 import { useDataTrust } from '@/hooks/useDataTrust'
+import { extractProvenance } from '@/utils/provenance'
 import { DataTrustIndicator } from '@/components/DataTrustIndicator'
 
 const { Text, Paragraph } = Typography
@@ -77,7 +78,7 @@ export default function PodDetail({ pod, cluster, open, onClose, onRestarted }: 
     setDetailLoading(true)
     try {
       const res = await k8sApi.podDetail(pod.name, { cluster, namespace: pod.namespace })
-      trust.markSuccess(seq)
+      trust.markSuccess(seq, extractProvenance(res))
       setDetail(res)
       if (res.containers && res.containers.length > 0) {
         setSelectedContainer(res.containers[0].name)
@@ -355,11 +356,14 @@ export default function PodDetail({ pod, cluster, open, onClose, onRestarted }: 
         <DataTrustIndicator
           status={trust.status}
           lastSuccessfulAt={trust.lastSuccessfulAt}
-          ageSeconds={trust.ageSeconds}
+          fetchAgeSeconds={trust.fetchAgeSeconds}
           sourceLabel={trust.sourceLabel}
           error={trust.error}
-          formatAge={trust.formatAge}
+          formatFetchAge={trust.formatFetchAge}
           formatLastSuccessful={trust.formatLastSuccessful}
+            dataAgeSeconds={trust.dataAgeSeconds}
+            dataTimestampAvailable={trust.dataTimestampAvailable}
+            provenance={trust.provenance}
         />
       </div>
       {/* Resize Handle：Drawer 左侧边缘，鼠标拖拽调整宽度 */}

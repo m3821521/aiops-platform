@@ -64,6 +64,75 @@ func (h *Handler) List(c *gin.Context) {
 	})
 }
 
+// ListWithProvenance 同 List，但返回带 meta.provenance 的响应。
+// sourceUpdatedAt = max(incident.updated_at)，真实来自 MySQL。
+func (h *Handler) ListWithProvenance(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+
+	filter := ListFilter{
+		Status:    c.Query("status"),
+		Severity:  c.Query("severity"),
+		Namespace: c.Query("namespace"),
+		Service:   c.Query("service"),
+		Cluster:   c.Query("cluster"),
+		Keyword:   c.Query("keyword"),
+	}
+	if start := c.Query("start_time"); start != "" {
+		if t, err := time.Parse(time.RFC3339, start); err == nil {
+			filter.StartTime = &t
+		}
+	}
+	if end := c.Query("end_time"); end != "" {
+		if t, err := time.Parse(time.RFC3339, end); err == nil {
+			filter.EndTime = &t
+		}
+	}
+
+	incidents, total, err := h.Service.List(c.Request.Context(), filter, page, pageSize)
+	if err != nil {
+		response.Internal(c, "查询 Incident 失败: "+err.Error())
+		return
+	}
+
+	type incidentView struct {
+		Incident
+		Duration string `json:"duration"`
+	}
+	views := make([]incidentView, 0, len(incidents))
+	var sourceUpdatedAt time.Time
+	hasUpdated := false
+	for i := range incidents {
+		views = append(views, incidentView{
+			Incident: incidents[i],
+			Duration: formatDuration(incidents[i].Duration()),
+		})
+		if !hasUpdated || incidents[i].UpdatedAt.After(sourceUpdatedAt) {
+			sourceUpdatedAt = incidents[i].UpdatedAt
+			hasUpdated = true
+		}
+	}
+
+	fetchedAt := time.Now()
+	prov := &response.Provenance{
+		Source:             "mysql",
+		SourceType:         "mysql",
+		FetchedAt:          &fetchedAt,
+		TimestampAvailable: false,
+		TimestampSemantics: "latest_record_updated_at",
+	}
+	if hasUpdated {
+		su := sourceUpdatedAt
+		prov.SourceUpdatedAt = &su
+	}
+	response.OKWithProvenance(c, gin.H{
+		"items":     views,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	}, prov)
+}
+
 // Get GET /api/v1/incidents/:id
 func (h *Handler) Get(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)

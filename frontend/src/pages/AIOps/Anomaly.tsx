@@ -19,6 +19,7 @@ import type { AnomalyRecord, AnomalyListFilter } from '../../types'
 import AnomalyDetail from './AnomalyDetail'
 import IncidentDetail from './IncidentDetail'
 import { useDataTrust } from '@/hooks/useDataTrust'
+import { extractProvenance } from '@/utils/provenance'
 import { DataTrustIndicator } from '@/components/DataTrustIndicator'
 
 const severityColor: Record<string, string> = {
@@ -54,7 +55,7 @@ export default function Anomaly() {
     setLoading(true)
     try {
       const res = await anomalyApi.list({ ...filter, metric: keyword || undefined, page, page_size: pageSize })
-      trust.markSuccess(seq)
+      trust.markSuccess(seq, extractProvenance(res))
       setData(res.items || [])
       setTotal(res.total || 0)
     } catch (e: any) {
@@ -273,11 +274,14 @@ export default function Anomaly() {
           <DataTrustIndicator
             status={trust.status}
             lastSuccessfulAt={trust.lastSuccessfulAt}
-            ageSeconds={trust.ageSeconds}
+            fetchAgeSeconds={trust.fetchAgeSeconds}
             sourceLabel={trust.sourceLabel}
             error={trust.error}
-            formatAge={trust.formatAge}
+            formatFetchAge={trust.formatFetchAge}
             formatLastSuccessful={trust.formatLastSuccessful}
+            dataAgeSeconds={trust.dataAgeSeconds}
+            dataTimestampAvailable={trust.dataTimestampAvailable}
+            provenance={trust.provenance}
           />
         </div>
         {trust.error && trust.status === 'stale' && (

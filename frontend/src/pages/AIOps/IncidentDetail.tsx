@@ -17,6 +17,7 @@ import { workflowApi, type Workflow, type WorkflowExecution, type WorkflowStepEx
 import type { Incident, IncidentSignal, TopologyNode, RCAResult, AIAnalysisResult } from '@/types'
 import dayjs from 'dayjs'
 import { useDataTrust } from '@/hooks/useDataTrust'
+import { extractProvenance } from '@/utils/provenance'
 import { DataTrustIndicator } from '@/components/DataTrustIndicator'
 
 const severityColor: Record<string, string> = {
@@ -490,7 +491,7 @@ export default function IncidentDetail({ id, open, onClose, onChanged }: Props) 
         incidentApi.get(id),
         incidentApi.signals(id),
       ])
-      trust.markSuccess(seq)
+      trust.markSuccess(seq, extractProvenance(incRes))
       setIncident(incRes)
       setSignals(sigRes.items || [])
     } catch (err: any) {
@@ -1788,11 +1789,14 @@ export default function IncidentDetail({ id, open, onClose, onChanged }: Props) 
         <DataTrustIndicator
           status={trust.status}
           lastSuccessfulAt={trust.lastSuccessfulAt}
-          ageSeconds={trust.ageSeconds}
+          fetchAgeSeconds={trust.fetchAgeSeconds}
           sourceLabel={trust.sourceLabel}
           error={trust.error}
-          formatAge={trust.formatAge}
+          formatFetchAge={trust.formatFetchAge}
           formatLastSuccessful={trust.formatLastSuccessful}
+            dataAgeSeconds={trust.dataAgeSeconds}
+            dataTimestampAvailable={trust.dataTimestampAvailable}
+            provenance={trust.provenance}
         />
       </div>
       <Spin spinning={loading}>

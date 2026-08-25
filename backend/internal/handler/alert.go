@@ -146,6 +146,55 @@ func (h *AlertHandler) List(c *gin.Context) {
 	})
 }
 
+// ListWithProvenance 同 List，但返回带 meta.provenance 的响应。
+// sourceUpdatedAt = max(alert.updated_at)，真实来自 MySQL。
+func (h *AlertHandler) ListWithProvenance(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+
+	filter := alert.ListFilter{
+		Status:    c.Query("status"),
+		Severity:  c.Query("severity"),
+		Alertname: c.Query("alertname"),
+		Namespace: c.Query("namespace"),
+		Service:   c.Query("service"),
+	}
+
+	items, total, err := h.Repo.List(c.Request.Context(), filter, page, pageSize)
+	if err != nil {
+		response.Internal(c, err.Error())
+		return
+	}
+
+	var sourceUpdatedAt time.Time
+	hasUpdated := false
+	for i := range items {
+		if !hasUpdated || items[i].UpdatedAt.After(sourceUpdatedAt) {
+			sourceUpdatedAt = items[i].UpdatedAt
+			hasUpdated = true
+		}
+	}
+
+	fetchedAt := time.Now()
+	prov := &response.Provenance{
+		Source:             "mysql",
+		SourceType:         "mysql",
+		FetchedAt:          &fetchedAt,
+		TimestampAvailable: false,
+		TimestampSemantics: "latest_record_updated_at",
+	}
+	if hasUpdated {
+		su := sourceUpdatedAt
+		prov.SourceUpdatedAt = &su
+	}
+	response.OKWithProvenance(c, listResult{
+		Items:    items,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}, prov)
+}
+
 // Get 处理 GET /api/v1/alerts/:id
 func (h *AlertHandler) Get(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)

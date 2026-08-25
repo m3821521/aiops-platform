@@ -6,6 +6,7 @@ import { clusterApi } from '@/api/cluster'
 import type { Node, Cluster } from '@/types'
 import NodeDetail from './NodeDetail'
 import { useDataTrust } from '@/hooks/useDataTrust'
+import { extractProvenance } from '@/utils/provenance'
 import { DataTrustIndicator } from '@/components/DataTrustIndicator'
 
 const POLL_INTERVAL = 15000
@@ -35,7 +36,7 @@ export default function Nodes() {
     if (!silent) setLoading(true)
     try {
       const res = await k8sApi.nodes(cluster)
-      trust.markSuccess(seq)
+      trust.markSuccess(seq, extractProvenance(res))
       setData(res || [])
     } catch (err: any) {
       trust.markError(seq, err?.message || '加载 Node 列表失败')
@@ -95,11 +96,14 @@ export default function Nodes() {
           <DataTrustIndicator
             status={trust.status}
             lastSuccessfulAt={trust.lastSuccessfulAt}
-            ageSeconds={trust.ageSeconds}
+            fetchAgeSeconds={trust.fetchAgeSeconds}
             sourceLabel={trust.sourceLabel}
             error={trust.error}
-            formatAge={trust.formatAge}
+            formatFetchAge={trust.formatFetchAge}
             formatLastSuccessful={trust.formatLastSuccessful}
+            dataAgeSeconds={trust.dataAgeSeconds}
+            dataTimestampAvailable={trust.dataTimestampAvailable}
+            provenance={trust.provenance}
           />
         </div>
         {trust.error && trust.status === 'stale' && (

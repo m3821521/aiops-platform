@@ -11,7 +11,8 @@ import {
 } from '@ant-design/icons';
 import { connectionApi, credentialApi } from '../../api/connection';
 import type { ConnectionView, Credential, TestConnectionResult } from '../../api/connection';
-import { useDataTrust } from '@/hooks/useDataTrust';
+import { useDataTrust } from '@/hooks/useDataTrust'
+import { extractProvenance } from '@/utils/provenance';
 import { DataTrustIndicator } from '@/components/DataTrustIndicator';
 
 const { Option } = Select;
@@ -92,7 +93,7 @@ export default function ExternalConnections() {
     if (!silent) setLoading(true);
     try {
       const res = await connectionApi.list({ page, page_size: pageSize });
-      trust.markSuccess(seq);
+      trust.markSuccess(seq, extractProvenance(res));
       setConnections(res.items || []);
       setTotal(res.total || 0);
       setLastUpdated(new Date());
@@ -484,11 +485,14 @@ export default function ExternalConnections() {
           <DataTrustIndicator
             status={trust.status}
             lastSuccessfulAt={trust.lastSuccessfulAt}
-            ageSeconds={trust.ageSeconds}
+            fetchAgeSeconds={trust.fetchAgeSeconds}
             sourceLabel={trust.sourceLabel}
             error={trust.error}
-            formatAge={trust.formatAge}
+            formatFetchAge={trust.formatFetchAge}
             formatLastSuccessful={trust.formatLastSuccessful}
+            dataAgeSeconds={trust.dataAgeSeconds}
+            dataTimestampAvailable={trust.dataTimestampAvailable}
+            provenance={trust.provenance}
           />
         </div>
         {/* P1-PRODUCT-05: 数据新鲜度提示 */}

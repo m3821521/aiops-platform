@@ -1,9 +1,29 @@
+// Data Provenance：数据来源和时间戳信息（P1-X.10）
+export interface DataProvenance {
+  source: string
+  sourceType?: string
+  fetchedAt?: string
+  dataTimestamp?: string
+  sourceUpdatedAt?: string
+  cacheHit: boolean
+  cacheCreatedAt?: string
+  cacheExpiresAt?: string
+  timestampAvailable: boolean
+  timestampSemantics?: string
+}
+
+// 响应元数据
+export interface ResponseMeta {
+  provenance?: DataProvenance
+}
+
 // 通用响应结构
 export interface ApiResponse<T = any> {
   code: number
   message: string
   data: T
   request_id?: string
+  meta?: ResponseMeta
 }
 
 // 分页响应

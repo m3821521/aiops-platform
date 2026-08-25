@@ -3,6 +3,7 @@ package automation
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/aiops/aiops-platform/internal/auth"
 	"github.com/aiops/aiops-platform/pkg/response"
@@ -100,7 +101,29 @@ func (h *Handler) List(c *gin.Context) {
 		response.Internal(c, err.Error())
 		return
 	}
-	response.OK(c, gin.H{"items": actions, "total": total, "page": page, "page_size": pageSize})
+
+	var sourceUpdatedAt time.Time
+	hasUpdated := false
+	for i := range actions {
+		if !hasUpdated || actions[i].UpdatedAt.After(sourceUpdatedAt) {
+			sourceUpdatedAt = actions[i].UpdatedAt
+			hasUpdated = true
+		}
+	}
+
+	fetchedAt := time.Now()
+	prov := &response.Provenance{
+		Source:             "mysql",
+		SourceType:         "mysql",
+		FetchedAt:          &fetchedAt,
+		TimestampAvailable: false,
+		TimestampSemantics: "latest_record_updated_at",
+	}
+	if hasUpdated {
+		su := sourceUpdatedAt
+		prov.SourceUpdatedAt = &su
+	}
+	response.OKWithProvenance(c, gin.H{"items": actions, "total": total, "page": page, "page_size": pageSize}, prov)
 }
 
 // Get GET /api/v1/actions/:id

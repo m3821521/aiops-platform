@@ -23,10 +23,31 @@ request.interceptors.request.use(
 request.interceptors.response.use(
   (response) => {
     const data = response.data as ApiResponse
-    // 后端返回 { code, message, data } 结构
+    // 后端返回 { code, message, data, meta, request_id } 结构
     if (data && typeof data === 'object' && 'code' in data) {
       if (data.code === 0 || data.code === 200) {
-        return data.data
+        const result = data.data
+        // 将 meta 和 request_id 作为不可枚举属性附加到返回对象上。
+        // 现有业务代码 res.items 不受影响，useDataTrust 可通过 extractProvenance() 提取。
+        if (result && typeof result === 'object') {
+          if (data.meta) {
+            Object.defineProperty(result, '__meta', {
+              value: data.meta,
+              enumerable: false,
+              writable: false,
+              configurable: true,
+            })
+          }
+          if (data.request_id) {
+            Object.defineProperty(result, '__requestId', {
+              value: data.request_id,
+              enumerable: false,
+              writable: false,
+              configurable: true,
+            })
+          }
+        }
+        return result
       }
       // GET 请求不全局弹窗，由页面自行处理空状态/错误提示
       const method = response.config.method?.toLowerCase()
