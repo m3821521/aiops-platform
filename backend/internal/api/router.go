@@ -2,6 +2,9 @@ package api
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/aiops/aiops-platform/internal/agent"
 	"github.com/aiops/aiops-platform/internal/audit"
@@ -330,5 +333,110 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 		}
 	}
 
+	// P1-X.10 Phase 2: Production 单端口架构。
+	// Go Backend 同时托管 React dist 静态文件 + SPA fallback。
+	// API 路由（/api/v1, /health, /ready, /metrics, /swagger）已在上方注册，优先级高于 NoRoute。
+	setupStaticServing(r)
+
 	return r
+}
+
+// setupStaticServing 配置 React 静态文件托管和 SPA fallback。
+// 生产环境由 Go Backend 托管 frontend/dist，实现单端口架构。
+// 开发环境仍使用 Vite Dev Server (:5173) + Vite Proxy。
+func setupStaticServing(r *gin.Engine) {
+	distDir := resolveFrontendDistDir()
+	if distDir == "" {
+		// 未找到 frontend/dist，不启用静态托管（开发模式或未 build）。
+		return
+	}
+
+	// 托管 /assets/* 静态资源（JS/CSS/images）。
+	assetsDir := filepath.Join(distDir, "assets")
+	if _, err := os.Stat(assetsDir); err == nil {
+		r.Static("/assets", assetsDir)
+	}
+
+	// 托管根目录下的其他静态文件（favicon.ico, vite.svg, robots.txt 等）。
+	if entries, err := os.ReadDir(distDir); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if name == "index.html" {
+				continue // index.html 由 SPA fallback 处理
+			}
+			r.StaticFile("/"+name, filepath.Join(distDir, name))
+		}
+	}
+
+	indexPath := filepath.Join(distDir, "index.html")
+
+	// SPA fallback: 任何未匹配路由返回 index.html。
+	// 但 /api/* 必须返回 JSON 404，不能返回 HTML。
+	r.NoRoute(func(c *gin.Context) {
+		path := c.Request.URL.Path
+
+		// API 请求返回 JSON 404，禁止进入 SPA fallback。
+		if strings.HasPrefix(path, "/api/") {
+			c.JSON(http.StatusNotFound, gin.H{
+				"code":    http.StatusNotFound,
+				"message": "API endpoint not found: " + path,
+			})
+			return
+		}
+
+		// 其他路径返回 index.html（React Router 客户端路由）。
+		if _, err := os.Stat(indexPath); err == nil {
+			c.File(indexPath)
+			return
+		}
+
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    http.StatusNotFound,
+			"message": "frontend dist not found, run 'npm run build' in frontend/",
+		})
+	})
+}
+
+// resolveFrontendDistDir 解析 frontend/dist 目录路径。
+// 优先级：
+// 1. 环境变量 FRONTEND_DIST_DIR
+// 2. 相对于当前工作目录的候选路径
+// 3. 相对于可执行文件的候选路径
+// 返回空字符串表示未找到。
+func resolveFrontendDistDir() string {
+	// 1. 环境变量优先。
+	if envDir := os.Getenv("FRONTEND_DIST_DIR"); envDir != "" {
+		if _, err := os.Stat(filepath.Join(envDir, "index.html")); err == nil {
+			return envDir
+		}
+	}
+
+	// 2. 候选路径（从项目根目录或 backend/ 目录启动）。
+	candidates := []string{
+		"frontend/dist",          // 从项目根目录启动
+		"../frontend/dist",       // 从 backend/ 目录启动
+		"./frontend/dist",        // 显式相对路径
+		"/app/frontend/dist",     // Docker 容器内常见路径
+		"/app/dist",              // Docker 容器内 dist 直接在 /app
+	}
+
+	wd, err := os.Getwd()
+	if err == nil {
+		// 也尝试基于工作目录的绝对路径。
+		candidates = append(candidates,
+			filepath.Join(wd, "frontend/dist"),
+			filepath.Join(wd, "..", "frontend/dist"),
+		)
+	}
+
+	for _, dir := range candidates {
+		if _, err := os.Stat(filepath.Join(dir, "index.html")); err == nil {
+			return dir
+		}
+	}
+
+	return ""
 }
