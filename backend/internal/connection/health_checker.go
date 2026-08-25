@@ -213,7 +213,12 @@ func (h *HealthChecker) checkOne(parentCtx context.Context, conn Connection) Hea
 		result.CheckedAt = time.Now()
 	} else if testResult != nil {
 		result.Status = testResult.Status
-		result.Error = sanitizeError(testResult.ErrorMessage)
+		// P1-X.10 Error Semantic Fix: 只有非 available 状态才保留错误信息。
+		// available 时必须清除 last_error，禁止把 Provider 成功描述（如 "Kubernetes v1.35.1"）
+		// 存入 last_error 字段，否则前端会误显示"查看错误"。
+		if testResult.Status != StatusAvailable {
+			result.Error = sanitizeError(testResult.ErrorMessage)
+		}
 		result.CheckedAt = testResult.CheckedAt
 		result.LatencyMs = testResult.LatencyMs
 	} else {

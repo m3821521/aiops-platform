@@ -372,7 +372,9 @@ export default function ExternalConnections() {
         return (
           <Space direction="vertical" size={0}>
             <span style={{ color, fontSize: 12 }}>{formatLastCheck(time)}</span>
-            {record?.last_error && freshness !== 'stale' && (
+            {/* P1-X.10 Error Semantic Fix: 只有 status=unavailable 且有 last_error 时才显示"查看错误"。
+                available 连接即使有历史 last_error（旧数据），也不应显示当前错误。 */}
+            {record?.status === 'unavailable' && record?.last_error && freshness !== 'stale' && (
               <Tooltip title={record.last_error}>
                 <span style={{ fontSize: 11, color: '#ff4d4f', cursor: 'pointer' }}>查看错误</span>
               </Tooltip>
