@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import {
   Row, Col, Card, Statistic, Select, Button, Space, Spin, Alert, Tag, Table, Typography,
-  Tooltip, Empty,
+  Tooltip, Empty, message,
 } from 'antd'
 import {
   ReloadOutlined, DashboardOutlined, FundOutlined, WarningOutlined, CheckCircleOutlined,
@@ -184,7 +184,9 @@ export default function MonitoringOverview() {
     clusterApi.list().then((res) => {
       setClusters(res || [])
       if (res && res.length > 0 && !cluster) setCluster(res[0].name)
-    }).catch(() => {})
+    }).catch(() => {
+      message.warning('集群列表加载失败，监控数据可能不完整')
+    })
   }, [])
 
   useEffect(() => {

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import {
-  Row, Col, Typography, Space, Tag, Spin, Table, Button, Progress, Empty, Alert, Card, Badge, Tooltip, Statistic,
+  Row, Col, Typography, Space, Tag, Spin, Table, Button, Progress, Empty, Alert, Card, Badge, Tooltip, Statistic, message,
 } from 'antd'
 import {
   ReloadOutlined, WarningOutlined, CheckCircleOutlined, ClockCircleOutlined,
@@ -65,6 +65,8 @@ export default function Dashboard() {
   const navigate = useNavigate()
   const refreshTokenRef = useRef(0)
   const pollingRef = useRef<number | null>(null)
+  // P1-X.11: 防 toast storm — execution 加载失败仅提示一次
+  const execErrorNotified = useRef(false)
 
   // === P1-X.9: Multi-Source Data Trust ===
   // 每个核心数据源独立跟踪 success/failure/lastSuccessfulAt
@@ -191,16 +193,28 @@ export default function Dashboard() {
         actionTrust.markSuccess(actSeq, extractProvenance(res))
         // 对 success Action 加载 executions 获取 Verification（限制数量，避免 N+1 限流）
         const successActions = actionList.filter((a) => a.status === 'success').slice(0, 5)
+        // P1-X.11: Error → null（不是 []），区分 API Error 与 Success+Empty
         const execResults = await Promise.allSettled(
-          successActions.map((a) => automationApi.executions(a.id).catch(() => [] as ActionExecution[]))
+          successActions.map((a) => automationApi.executions(a.id).catch(() => null))
         )
         if (token !== refreshTokenRef.current) return
         const allExecs: ActionExecution[] = []
+        let hasExecError = false
         execResults.forEach((r) => {
           if (r.status === 'fulfilled' && Array.isArray(r.value)) {
+            // Success（可能为空数组）→ 正常合并
             allExecs.push(...r.value)
+          } else {
+            // Error（null 或 rejected）→ 不伪造空数据，标记错误
+            hasExecError = true
           }
         })
+        if (hasExecError && !execErrorNotified.current) {
+          message.warning('部分操作执行记录加载失败，验证状态可能不完整')
+          execErrorNotified.current = true
+        } else if (!hasExecError) {
+          execErrorNotified.current = false
+        }
         setActionExecutions(allExecs)
       })
       .catch((err: any) => {

@@ -1,4 +1,4 @@
-import { Layout, Dropdown, Avatar, Button, Select, Space, Tooltip, Badge, Popover, List, Tag } from 'antd'
+import { Layout, Dropdown, Avatar, Button, Select, Space, Tooltip, Badge, Popover, List, Tag, message } from 'antd'
 import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -12,7 +12,7 @@ import {
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { clusterApi } from '@/api/cluster'
 import { alertsApi } from '@/api/alerts'
 import { automationApi } from '@/api/automation'
@@ -29,21 +29,42 @@ export default function AppHeader() {
   const [clusters, setClusters] = useState<Cluster[]>([])
   const [firingAlerts, setFiringAlerts] = useState<Alert[]>([])
   const [pendingActions, setPendingActions] = useState<AutomationAction[]>([])
+  // P1-X.11: 防 toast storm — 仅在首次失败时提示，成功后重置
+  const clusterErrorNotified = useRef(false)
+  const alertsErrorNotified = useRef(false)
+  const actionsErrorNotified = useRef(false)
 
   useEffect(() => {
-    clusterApi.list().then(setClusters).catch(() => {})
+    clusterApi.list()
+      .then((res) => { setClusters(res || []); clusterErrorNotified.current = false })
+      .catch(() => {
+        if (!clusterErrorNotified.current) {
+          message.warning('集群列表加载失败，部分功能可能不可用')
+          clusterErrorNotified.current = true
+        }
+      })
   }, [])
 
   const fetchAlerts = () => {
     alertsApi.list({ page: 1, page_size: 5, status: 'firing' })
-      .then((res) => setFiringAlerts(res?.items || []))
-      .catch(() => {})
+      .then((res) => { setFiringAlerts(res?.items || []); alertsErrorNotified.current = false })
+      .catch(() => {
+        if (!alertsErrorNotified.current) {
+          message.warning('活动告警加载失败')
+          alertsErrorNotified.current = true
+        }
+      })
   }
 
   const fetchPendingActions = () => {
     automationApi.pendingApproval({ page: 1, page_size: 5 })
-      .then((res) => setPendingActions(res?.items || []))
-      .catch(() => {})
+      .then((res) => { setPendingActions(res?.items || []); actionsErrorNotified.current = false })
+      .catch(() => {
+        if (!actionsErrorNotified.current) {
+          message.warning('待审批操作加载失败')
+          actionsErrorNotified.current = true
+        }
+      })
   }
 
   useEffect(() => {
