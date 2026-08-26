@@ -236,9 +236,38 @@ func (s *Scorer) scoreTopology(ctx IncidentContext, candidate RootCauseCandidate
 
 // CalculateConfidence 计算整体置信度。
 // 基于证据数量、类型多样性、时间一致性、拓扑一致性。
+// P1-X.10: 增加 Evidence Level hard cap — 没有 Direct Evidence 时 confidence 不得超过 0.60，仅 Alert/Metric 时不得超过 0.40。
 func CalculateConfidence(candidate RootCauseCandidate, evidenceCount int) float64 {
 	if evidenceCount == 0 || len(candidate.Evidence) == 0 {
 		return 0
+	}
+
+	// 统计 Evidence Level。
+	directCount := 0
+	directCausalCount := 0
+	corroboratingCount := 0
+	contextCount := 0
+	contradictoryCount := 0
+	errorEvidenceCount := 0
+	for _, e := range candidate.Evidence {
+		if e.TrustStatus == "error" {
+			errorEvidenceCount++
+			continue
+		}
+		if e.CausalRelevance == "contradictory" {
+			contradictoryCount++
+		}
+		switch e.Level {
+		case EvidenceLevelDirect:
+			directCount++
+			if e.CausalRelevance == "direct_causal" {
+				directCausalCount++
+			}
+		case EvidenceLevelCorroborating:
+			corroboratingCount++
+		default:
+			contextCount++
+		}
 	}
 
 	// 证据类型多样性。
@@ -258,9 +287,66 @@ func CalculateConfidence(candidate RootCauseCandidate, evidenceCount int) float6
 	}
 	avgScore /= float64(len(candidate.Evidence))
 
-	// 综合。
-	confidence := diversityScore*0.3 + countScore*0.2 + avgScore*0.5
-	return math.Min(0.95, confidence)
+	// 综合基础分。
+	baseConfidence := diversityScore*0.3 + countScore*0.2 + avgScore*0.5
+
+	// P1-X.10 Phase 4: Evidence Level + Causal Relevance hard cap。
+	// 存在明确 Direct Causal Evidence（如 OOMKilled）且无矛盾/错误证据 → 允许高置信度。
+	hardCap := 0.95
+	capReason := ""
+	if errorEvidenceCount > 0 {
+		// 存在 error evidence，降低置信度上限。
+		hardCap = 0.50
+		capReason = "存在 error 状态的 Evidence，confidence 上限 0.50"
+	} else if directCount == 0 && corroboratingCount == 0 {
+		// 只有 Context（Alert/Metric），最高 0.40。
+		hardCap = 0.40
+		capReason = "仅存在 Context 级证据（Alert/Metric），无 Direct 或 Corroborating 证据，confidence 上限 0.40"
+	} else if directCount == 0 {
+		// 有 Corroborating 但无 Direct，最高 0.60。
+		hardCap = 0.60
+		capReason = "存在 Corroborating 证据但无 Direct 证据，confidence 上限 0.60"
+	} else if directCausalCount >= 1 && contradictoryCount == 0 {
+		// P1-X.10 Phase 4: 存在明确 Direct Causal Evidence（如 OOMKilled），单条即可高置信度。
+		hardCap = 0.95
+		capReason = "存在明确 Direct Causal Evidence，允许高置信度"
+	} else if directCount >= 2 {
+		// 有 2+ Direct Evidence，允许高置信度。
+		hardCap = 0.95
+		capReason = "存在 2+ Direct Evidence，允许高置信度"
+	} else {
+		// 有 1 条 Direct 但 Causal relevance 不明确，最高 0.85。
+		hardCap = 0.85
+		capReason = "存在 1 条 Direct Evidence 但 Causal relevance 不明确，confidence 上限 0.85"
+	}
+
+	confidence := math.Min(hardCap, baseConfidence)
+	_ = capReason // capReason 在 Pipeline 层用于 confidence_reason
+	return confidence
+}
+
+// GetConfidenceCapReason 返回置信度上限原因（P1-X.10）。
+func GetConfidenceCapReason(candidate RootCauseCandidate) string {
+	directCount := 0
+	corroboratingCount := 0
+	for _, e := range candidate.Evidence {
+		switch e.Level {
+		case EvidenceLevelDirect:
+			directCount++
+		case EvidenceLevelCorroborating:
+			corroboratingCount++
+		}
+	}
+	if directCount == 0 && corroboratingCount == 0 {
+		return "仅存在 Context 级证据（Alert/Metric），无 Direct 或 Corroborating 证据"
+	}
+	if directCount == 0 {
+		return "存在 Corroborating 证据但无 Direct 证据，无法确认根因"
+	}
+	if directCount >= 2 {
+		return "存在 2+ Direct Evidence，证据链完整"
+	}
+	return "存在 1 条 Direct Evidence，建议补充更多证据确认"
 }
 
 // RankCandidates 按分数排序候选根因。

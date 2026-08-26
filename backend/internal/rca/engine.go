@@ -9,9 +9,16 @@ import (
 
 // Engine 是根因分析引擎（规则引擎版）。
 // 第一版不做复杂 AI，基于告警统计和时间关联推断根因。
+//
+// Deprecated: use rca.Pipeline instead.
+// Engine is retained temporarily for backward compatibility and tests.
+// Production RCA uses Pipeline via RCAHandler (GET /api/v1/rca/analyze)
+// and IncidentRCAHandler (POST/GET /api/v1/incidents/:id/rca).
 type Engine struct{}
 
 // NewEngine 创建 RCA 引擎。
+//
+// Deprecated: use rca.NewPipeline instead. See Engine deprecation note.
 func NewEngine() *Engine {
 	return &Engine{}
 }
@@ -54,16 +61,24 @@ func (e *Engine) Analyze(alerts []AlertInfo) *Result {
 	// 7. 计算置信度。
 	confidence := calcConfidence(root, alerts)
 
+	// P1-X.10 Evidence-First: 旧版 Engine 只有 Alert 数据（全部是 Context Level），
+	// 没有 Direct/Corroborating Evidence，必须应用 Confidence Hard Cap ≤ 0.40，
+	// 且 root_cause_status = unknown，不能输出确定性根因。
+	if confidence > 0.40 {
+		confidence = 0.40
+	}
+
 	// 8. 生成根因描述。
 	rootCause := describeRootCause(root)
 
 	return &Result{
-		RootCause:        rootCause,
-		Confidence:       confidence,
+		RootCause:       rootCause,
+		RootCauseStatus: RootCauseStatusUnknown, // P1-X.10: Alert-only 不能确认根因
+		Confidence:      confidence,
 		AffectedServices: affected,
-		Evidence:         evidence,
-		Timeline:         timeline,
-		AnalyzedAt:       time.Now(),
+		Evidence:        evidence,
+		Timeline:        timeline,
+		AnalyzedAt:      time.Now(),
 	}
 }
 

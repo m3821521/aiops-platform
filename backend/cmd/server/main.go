@@ -122,7 +122,8 @@ func main() {
 	topologyHandler := &topology.Handler{Service: topologyService}
 	slog.Info("topology service initialized")
 
-	rcaEngine := rca.NewEngine()
+	// P1-X.10 Phase 6: Legacy RCA Engine 已废弃，统一使用 Pipeline。
+	// rcaEngine := rca.NewEngine() // 保留代码供参考，不再初始化
 	esClient := logging.NewClient(cfg.Elasticsearch.Address, cfg.Elasticsearch.Index,
 		cfg.Elasticsearch.Username, cfg.Elasticsearch.Password, cfg.Elasticsearch.Timeout)
 	logAnalyzer := logging.NewAnalyzer(10, 1*time.Hour)
@@ -538,7 +539,7 @@ func main() {
 		Metrics:    metricsHandler,
 		Alert:      &handler.AlertHandler{Repo: alertRepo, Aggregator: alertAggregator, NoiseReducer: alertNoiseReducer, IncidentService: incidentService},
 		Anomaly:    anomalyHandler,
-		RCA:        &handler.RCAHandler{AlertRepo: alertRepo, Engine: rcaEngine},
+		RCA:        &handler.RCAHandler{AlertRepo: alertRepo, Pipeline: rcaPipeline}, // P1-X.10 Phase 6: Legacy API 统一使用 Pipeline
 		Logs:       logsHandler,
 		AI:         aiHandler,
 		AIConfig:   aiConfigHandler,
@@ -1077,6 +1078,9 @@ func (c *rcaContextCollector) CollectPodResourceState(ctx context.Context, clust
 			containerState.LastState = "terminated"
 			containerState.LastReason = cs.LastTerminationState.Terminated.Reason
 			containerState.LastExitCode = &cs.LastTerminationState.Terminated.ExitCode
+			if !cs.LastTerminationState.Terminated.FinishedAt.IsZero() {
+				containerState.LastFinishedAt = cs.LastTerminationState.Terminated.FinishedAt.Time.Format(time.RFC3339)
+			}
 		} else if cs.LastTerminationState.Waiting != nil {
 			containerState.LastState = "waiting"
 			containerState.LastReason = cs.LastTerminationState.Waiting.Reason

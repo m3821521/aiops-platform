@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import {
   Drawer, Descriptions, Tag, Spin, Alert, Space, Card, Button, InputNumber, Modal, message,
 } from 'antd'
@@ -7,6 +7,11 @@ import { k8sApi } from '@/api/kubernetes'
 import { automationApi } from '@/api/automation'
 import { usePermission } from '@/utils/permission'
 import dayjs from 'dayjs'
+import { useDataTrust } from '@/hooks/useDataTrust'
+import { extractProvenance } from '@/utils/provenance'
+import { DataTrustIndicator } from '@/components/DataTrustIndicator'
+
+const POLL_INTERVAL = 15000
 
 interface Props {
   deployment: Deployment | null
@@ -20,22 +25,48 @@ export default function DeploymentDetail({ deployment, cluster, open, onClose, o
   const canWrite = usePermission('cluster', 'write')
   const [loading, setLoading] = useState(false)
   const [detail, setDetail] = useState<Deployment | null>(null)
-  const [error, setError] = useState('')
   const [scaleOpen, setScaleOpen] = useState(false)
   const [replicas, setReplicas] = useState(1)
   const [scaling, setScaling] = useState(false)
+  const pollingRef = useRef<number | null>(null)
 
+  // P1-X.9: 统一 Data Trust（DeploymentDetail 来自 Kubernetes API）
+  const trust = useDataTrust({ source: 'kubernetes' })
+
+  const fetchDetail = async (silent = false) => {
+    if (!deployment) return
+    const seq = trust.beginFetch()
+    if (!silent) setLoading(true)
+    try {
+      const res = await k8sApi.deploymentDetail(deployment.name, { cluster, namespace: deployment.namespace })
+      trust.markSuccess(seq, extractProvenance(res))
+      setDetail(res)
+      setReplicas(res.replicas || 1)
+    } catch (err: any) {
+      // P1-X.10 Phase 3.2: API failure 不得清空数据，保留上次成功数据并标记 error/stale
+      trust.markError(seq, err?.message || '加载 Deployment 详情失败')
+    } finally {
+      if (!silent) setLoading(false)
+    }
+  }
+
+  // Drawer 打开时立即加载
   useEffect(() => {
     if (open && deployment) {
-      setLoading(true)
-      setError('')
       setDetail(deployment)
       setReplicas(deployment.replicas || 1)
-      // 尝试获取详情
-      k8sApi.deploymentDetail(deployment.name, { cluster, namespace: deployment.namespace })
-        .then((res) => setDetail(res))
-        .catch(() => { /* 列表数据已足够 */ })
-        .finally(() => setLoading(false))
+      fetchDetail()
+    }
+  }, [open, deployment, cluster])
+
+  // P1-X.10 Phase 3.2: 15s 自动轮询（仅在 Drawer 打开时）
+  useEffect(() => {
+    if (!open || !deployment) return
+    pollingRef.current = window.setInterval(() => {
+      fetchDetail(true)
+    }, POLL_INTERVAL)
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current)
     }
   }, [open, deployment, cluster])
 
@@ -47,6 +78,8 @@ export default function DeploymentDetail({ deployment, cluster, open, onClose, o
       message.success(`已将 ${detail.name} 扩容到 ${replicas} 副本`)
       setScaleOpen(false)
       onScaled?.()
+      // 扩容后立即刷新
+      fetchDetail()
     } catch (err: any) {
       message.error(err?.message || '扩容失败')
     } finally {
@@ -62,8 +95,43 @@ export default function DeploymentDetail({ deployment, cluster, open, onClose, o
       width={560}
       destroyOnClose
     >
+      {/* P1-X.10 Phase 3.2: Data Trust 状态指示器 */}
+      <div style={{ marginBottom: 12 }}>
+        <DataTrustIndicator
+          status={trust.status}
+          lastSuccessfulAt={trust.lastSuccessfulAt}
+          fetchAgeSeconds={trust.fetchAgeSeconds}
+          sourceLabel={trust.sourceLabel}
+          error={trust.error}
+          formatFetchAge={trust.formatFetchAge}
+          formatLastSuccessful={trust.formatLastSuccessful}
+          dataAgeSeconds={trust.dataAgeSeconds}
+          dataTimestampAvailable={trust.dataTimestampAvailable}
+          provenance={trust.provenance}
+        />
+      </div>
+
+      {/* P1-X.10 Phase 3.2: API failure 时明确提示，不伪装成空数据 */}
+      {trust.error && trust.status === 'stale' && (
+        <Alert
+          message="数据刷新失败"
+          description={trust.error + '（当前显示的是上次成功获取的数据）'}
+          type="warning"
+          showIcon
+          style={{ marginBottom: 12 }}
+        />
+      )}
+      {trust.status === 'error' && (
+        <Alert
+          message="加载失败"
+          description={trust.error || '无法获取 Deployment 详情数据'}
+          type="error"
+          showIcon
+          style={{ marginBottom: 12 }}
+        />
+      )}
+
       <Spin spinning={loading}>
-        {error && <Alert message={error} type="error" showIcon style={{ marginBottom: 16 }} />}
         {detail && (
           <Space direction="vertical" style={{ width: '100%' }} size="large">
             <Card size="small" title="基本信息" extra={

@@ -439,6 +439,7 @@ export type EvidenceType = 'alert' | 'anomaly' | 'metric' | 'log' | 'event' | 't
 export interface RCAEvidence {
   id: string
   type: EvidenceType
+  level?: 'direct' | 'corroborating' | 'context'
   source: string
   timestamp: string
   resource_type?: string
@@ -458,6 +459,7 @@ export interface RCACandidate {
   resource_name: string
   namespace?: string
   root_cause: string
+  status?: 'unknown' | 'hypothesis' | 'probable' | 'confirmed'
   score: number
   confidence: number
   evidence: RCAEvidence[]
@@ -477,7 +479,34 @@ export interface RCAResult {
   incident_id: number
   status: RCAStatus
   root_cause: string
+  root_cause_status?: 'unknown' | 'hypothesis' | 'probable' | 'confirmed'
   confidence: number
+  confidence_reason?: string
+  evidence_sufficiency?: {
+    sufficient: boolean
+    direct_evidence_count: number
+    corroborating_evidence_count: number
+    context_count: number
+    missing_evidence?: string[]
+    confidence_cap: number
+    confidence_cap_reason?: string
+  }
+  possible_causes?: Array<{
+    cause: string
+    status: string
+    confidence: number
+    evidence_ids?: string[]
+  }>
+  recommendations?: Array<{
+    id: string
+    title: string
+    type: 'investigation' | 'remediation' | 'verification'
+    action: string
+    reason: string
+    risk: string
+    evidence_refs?: string[]
+    allowed: boolean
+  }>
   candidates: RCACandidate[]
   evidence: RCAEvidence[]
   impact: string[]

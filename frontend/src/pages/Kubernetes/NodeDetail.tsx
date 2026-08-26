@@ -1,10 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import {
   Drawer, Descriptions, Tag, Spin, Alert, Table, Typography, Space, Card,
 } from 'antd'
 import type { NodeDetail as NodeDetailType, NodeCondition } from '@/types'
 import { k8sApi } from '@/api/kubernetes'
 import dayjs from 'dayjs'
+import { useDataTrust } from '@/hooks/useDataTrust'
+import { extractProvenance } from '@/utils/provenance'
+import { DataTrustIndicator } from '@/components/DataTrustIndicator'
+
+const POLL_INTERVAL = 15000
 
 const { Text } = Typography
 
@@ -18,16 +23,42 @@ interface Props {
 export default function NodeDetail({ nodeName, cluster, open, onClose }: Props) {
   const [loading, setLoading] = useState(false)
   const [detail, setDetail] = useState<NodeDetailType | null>(null)
-  const [error, setError] = useState('')
+  const pollingRef = useRef<number | null>(null)
 
+  // P1-X.9: 统一 Data Trust（NodeDetail 来自 Kubernetes API）
+  const trust = useDataTrust({ source: 'kubernetes' })
+
+  const fetchDetail = async (silent = false) => {
+    if (!nodeName) return
+    const seq = trust.beginFetch()
+    if (!silent) setLoading(true)
+    try {
+      const res = await k8sApi.nodeDetail(nodeName, cluster)
+      trust.markSuccess(seq, extractProvenance(res))
+      setDetail(res)
+    } catch (err: any) {
+      // P1-X.10 Phase 3.2: API failure 不得清空数据，保留上次成功数据并标记 error/stale
+      trust.markError(seq, err?.message || '加载 Node 详情失败')
+    } finally {
+      if (!silent) setLoading(false)
+    }
+  }
+
+  // Drawer 打开时立即加载
   useEffect(() => {
     if (open && nodeName) {
-      setLoading(true)
-      setError('')
-      k8sApi.nodeDetail(nodeName, cluster)
-        .then((res) => setDetail(res))
-        .catch((err) => setError(err?.message || '加载失败'))
-        .finally(() => setLoading(false))
+      fetchDetail()
+    }
+  }, [open, nodeName, cluster])
+
+  // P1-X.10 Phase 3.2: 15s 自动轮询（仅在 Drawer 打开时）
+  useEffect(() => {
+    if (!open || !nodeName) return
+    pollingRef.current = window.setInterval(() => {
+      fetchDetail(true)
+    }, POLL_INTERVAL)
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current)
     }
   }, [open, nodeName, cluster])
 
@@ -45,8 +76,43 @@ export default function NodeDetail({ nodeName, cluster, open, onClose }: Props) 
       width={640}
       destroyOnClose
     >
+      {/* P1-X.10 Phase 3.2: Data Trust 状态指示器 */}
+      <div style={{ marginBottom: 12 }}>
+        <DataTrustIndicator
+          status={trust.status}
+          lastSuccessfulAt={trust.lastSuccessfulAt}
+          fetchAgeSeconds={trust.fetchAgeSeconds}
+          sourceLabel={trust.sourceLabel}
+          error={trust.error}
+          formatFetchAge={trust.formatFetchAge}
+          formatLastSuccessful={trust.formatLastSuccessful}
+          dataAgeSeconds={trust.dataAgeSeconds}
+          dataTimestampAvailable={trust.dataTimestampAvailable}
+          provenance={trust.provenance}
+        />
+      </div>
+
+      {/* P1-X.10 Phase 3.2: API failure 时明确提示，不伪装成空数据 */}
+      {trust.error && trust.status === 'stale' && (
+        <Alert
+          message="数据刷新失败"
+          description={trust.error + '（当前显示的是上次成功获取的数据）'}
+          type="warning"
+          showIcon
+          style={{ marginBottom: 12 }}
+        />
+      )}
+      {trust.status === 'error' && (
+        <Alert
+          message="加载失败"
+          description={trust.error || '无法获取 Node 详情数据'}
+          type="error"
+          showIcon
+          style={{ marginBottom: 12 }}
+        />
+      )}
+
       <Spin spinning={loading}>
-        {error && <Alert message={error} type="error" showIcon style={{ marginBottom: 16 }} />}
         {detail && (
           <Space direction="vertical" style={{ width: '100%' }} size="large">
             <Card size="small" title="基本信息">

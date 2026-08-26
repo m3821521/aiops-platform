@@ -79,6 +79,19 @@ func Fail(c *gin.Context, httpStatus int, code int, message string) {
 	c.JSON(httpStatus, Body{Code: code, Message: message, RequestID: getRequestID(c)})
 }
 
+// FailWithMeta 返回带元数据的错误响应。
+// 用于需要 provenance 的 API 失败场景（如 Prometheus 查询失败时仍需告知数据源和请求时间）。
+// 错误响应必须保持原 HTTP 状态码，禁止把 500 改成 200。
+func FailWithMeta(c *gin.Context, httpStatus int, code int, message string, meta *Meta) {
+	c.JSON(httpStatus, Body{Code: code, Message: message, RequestID: getRequestID(c), Meta: meta})
+}
+
+// InternalWithProvenance 便捷方法：返回 500 + provenance 的错误响应。
+// 用于 Prometheus / 外部 Provider 查询失败场景，明确告知 source 和 fetchedAt。
+func InternalWithProvenance(c *gin.Context, message string, prov *Provenance) {
+	FailWithMeta(c, http.StatusInternalServerError, 500, message, &Meta{Provenance: prov})
+}
+
 func BadRequest(c *gin.Context, message string) {
 	Fail(c, http.StatusBadRequest, 400, message)
 }

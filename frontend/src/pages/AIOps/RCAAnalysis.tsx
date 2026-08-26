@@ -37,6 +37,7 @@ import {
   ClockCircleOutlined,
   ExclamationCircleOutlined,
   LinkOutlined,
+  BulbOutlined,
 } from '@ant-design/icons'
 import { rcaApi } from '@/api/rca'
 import { incidentApi } from '@/api/incident'
@@ -53,6 +54,9 @@ import type {
   AIAnalysisResult,
 } from '@/types'
 import IncidentDetail from './IncidentDetail'
+import { useDataTrust } from '@/hooks/useDataTrust'
+import { extractProvenance } from '@/utils/provenance'
+import { DataTrustIndicator } from '@/components/DataTrustIndicator'
 
 const { Title, Text, Paragraph } = Typography
 const { Panel } = Collapse
@@ -163,6 +167,9 @@ export default function RCAAnalysis() {
   const [incidentDetailOpen, setIncidentDetailOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // P1-X.10 Phase 3.3: RCA 核心数据（Incident + RCA）接入统一 Data Trust
+  const trust = useDataTrust({ source: 'mysql' })
+
   // 加载 Incident 列表
   useEffect(() => {
     incidentApi
@@ -178,29 +185,44 @@ export default function RCAAnalysis() {
       })
   }, [])
 
-  // 加载选中 Incident 的所有数据
+  // 加载选中 Incident 的所有数据（P1-X.10 Phase 3.1: 核心数据失败不得静默）
   const loadIncidentData = useCallback(async (id: number) => {
+    // P1-X.10 Phase 3.3: useDataTrust race protection — beginFetch 获取 sequence
+    const seq = trust.beginFetch()
     setLoading(true)
     setError(null)
     try {
+      // P1-X.10 Phase 3.1: incident 是核心数据，不使用 .catch(() => null) 静默吞错
+      // rca/ai/evidence/timeline 是次要数据，失败时保留 null 但记录警告
+      const incPromise = incidentApi.get(id)
       const [inc, rca, ai, ev, tl] = await Promise.all([
-        incidentApi.get(id).catch(() => null),
-        rcaApi.getLatest(id).catch(() => null),
-        aiAnalysisApi.getLatest(id).catch(() => null),
-        incidentApi.evidence(id).catch(() => null),
-        incidentApi.timeline(id).catch(() => null),
+        incPromise,
+        rcaApi.getLatest(id).catch((e) => { console.warn('RCA 加载失败:', e?.message); return null }),
+        aiAnalysisApi.getLatest(id).catch((e) => { console.warn('AI 分析加载失败:', e?.message); return null }),
+        incidentApi.evidence(id).catch((e) => { console.warn('证据加载失败:', e?.message); return null }),
+        incidentApi.timeline(id).catch((e) => { console.warn('时间线加载失败:', e?.message); return null }),
       ])
+      // P1-X.10 Phase 3.3: 核心数据成功 → markSuccess，携带 provenance
+      trust.markSuccess(seq, extractProvenance(inc))
       setIncident(inc)
       setRcaResult(rca)
       setAiResult(ai)
       setEvidenceBundle(ev)
       setTimeline((tl?.items || []).map((s: any) => ({ timestamp: s.timestamp, type: s.signal_type || s.type || "signal", description: s.title || s.description || "", severity: s.severity, resource: s.resource_name })))
     } catch (e: any) {
-      setError(e?.message || '加载数据失败')
+      // P1-X.10 Phase 3.3: 核心数据（incident）失败 → markError，保留 race protection
+      trust.markError(seq, e?.message || '加载事件数据失败')
+      // 核心数据失败时，清空旧数据并显示错误，避免旧数据冒充新选中的 incident
+      setIncident(null)
+      setRcaResult(null)
+      setAiResult(null)
+      setEvidenceBundle(null)
+      setTimeline([])
+      setError(e?.message || '加载事件数据失败')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [trust])
 
   useEffect(() => {
     if (selectedIncidentId) {
@@ -217,10 +239,10 @@ export default function RCAAnalysis() {
       const result = await rcaApi.analyze(selectedIncidentId)
       setRcaResult(result)
       message.success('RCA 分析完成')
-      // 刷新证据和时间线
+      // 刷新证据和时间线（次要数据，失败时记录警告但不影响 RCA 结果）
       const [ev, tl] = await Promise.all([
-        incidentApi.evidence(selectedIncidentId).catch(() => null),
-        incidentApi.timeline(selectedIncidentId).catch(() => null),
+        incidentApi.evidence(selectedIncidentId).catch((e) => { console.warn('证据刷新失败:', e?.message); return null }),
+        incidentApi.timeline(selectedIncidentId).catch((e) => { console.warn('时间线刷新失败:', e?.message); return null }),
       ])
       setEvidenceBundle(ev)
       setTimeline((tl?.items || []).map((s: any) => ({ timestamp: s.timestamp, type: s.signal_type || s.type || "signal", description: s.title || s.description || "", severity: s.severity, resource: s.resource_name })))
@@ -251,8 +273,9 @@ export default function RCAAnalysis() {
         incident.resource_name,
       )
       setImpactData(data)
-    } catch {
-      // ignore
+    } catch (e: any) {
+      // Impact 是次要展示数据，失败时不影响主流程
+      console.warn('影响分析加载失败:', e?.message)
     }
   }, [incident])
 
@@ -359,6 +382,24 @@ export default function RCAAnalysis() {
         </Row>
       </Card>
 
+      {/* P1-X.10 Phase 3.3: RCA 核心数据 Data Trust 状态指示器 */}
+      {selectedIncidentId && (
+        <div style={{ marginBottom: 16 }}>
+          <DataTrustIndicator
+            status={trust.status}
+            lastSuccessfulAt={trust.lastSuccessfulAt}
+            fetchAgeSeconds={trust.fetchAgeSeconds}
+            sourceLabel={trust.sourceLabel}
+            error={trust.error}
+            formatFetchAge={trust.formatFetchAge}
+            formatLastSuccessful={trust.formatLastSuccessful}
+            dataAgeSeconds={trust.dataAgeSeconds}
+            dataTimestampAvailable={trust.dataTimestampAvailable}
+            provenance={trust.provenance}
+          />
+        </div>
+      )}
+
       {error && (
         <Alert
           message="错误"
@@ -412,13 +453,76 @@ export default function RCAAnalysis() {
                 {rcaResult && (
                   <Space direction="vertical" size="middle" style={{ width: '100%' }}>
                     <div>
-                      <Text type="secondary">根因:</Text>
+                      <Space wrap>
+                        <Text type="secondary">根因:</Text>
+                        {rcaResult.root_cause_status && (
+                          <Tag color={
+                            rcaResult.root_cause_status === 'confirmed' ? 'green' :
+                            rcaResult.root_cause_status === 'probable' ? 'blue' :
+                            rcaResult.root_cause_status === 'hypothesis' ? 'orange' : 'default'
+                          }>
+                            {rcaResult.root_cause_status === 'confirmed' ? '已确认' :
+                             rcaResult.root_cause_status === 'probable' ? '可能' :
+                             rcaResult.root_cause_status === 'hypothesis' ? '假设' : '未知'}
+                          </Tag>
+                        )}
+                      </Space>
                       <div style={{ marginTop: 4 }}>
-                        <Title level={4} style={{ margin: 0, color: '#cf1322' }}>
-                          {rcaResult.root_cause || '未确定'}
+                        <Title level={4} style={{ margin: 0, color: rcaResult.root_cause ? '#cf1322' : '#8c8c8c' }}>
+                          {rcaResult.root_cause || (rcaResult.root_cause_status && rcaResult.root_cause_status !== 'confirmed' ? '根因未确认，需更多证据' : '未确定')}
                         </Title>
                       </div>
+                      {rcaResult.confidence_reason && (
+                        <Text type="secondary" style={{ fontSize: 12 }}>{rcaResult.confidence_reason}</Text>
+                      )}
                     </div>
+                    {/* P1-X.10: Evidence Sufficiency */}
+                    {rcaResult.evidence_sufficiency && (
+                      <div style={{ background: '#fafafa', padding: 12, borderRadius: 6 }}>
+                        <Space wrap size="large">
+                          <Text type="secondary">证据充足性:</Text>
+                          <Tag color={rcaResult.evidence_sufficiency.sufficient ? 'green' : 'orange'}>
+                            {rcaResult.evidence_sufficiency.sufficient ? '充足' : '不足'}
+                          </Tag>
+                          <Tag>Direct: {rcaResult.evidence_sufficiency.direct_evidence_count}</Tag>
+                          <Tag>Corroborating: {rcaResult.evidence_sufficiency.corroborating_evidence_count}</Tag>
+                          <Tag>Context: {rcaResult.evidence_sufficiency.context_count}</Tag>
+                          <Text type="secondary" style={{ fontSize: 12 }}>
+                            Confidence Cap: {Math.round(rcaResult.evidence_sufficiency.confidence_cap * 100)}%
+                          </Text>
+                        </Space>
+                        {rcaResult.evidence_sufficiency.missing_evidence && rcaResult.evidence_sufficiency.missing_evidence.length > 0 && (
+                          <div style={{ marginTop: 8 }}>
+                            <Text type="warning" style={{ fontSize: 12 }}>
+                              缺少证据: {rcaResult.evidence_sufficiency.missing_evidence.join(', ')}
+                            </Text>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {/* P1-X.10: Possible Causes（当根因未确认时显示） */}
+                    {rcaResult.possible_causes && rcaResult.possible_causes.length > 0 && (
+                      <div>
+                        <Text type="secondary">可能原因:</Text>
+                        <List
+                          size="small"
+                          dataSource={rcaResult.possible_causes}
+                          renderItem={(pc: any) => (
+                            <List.Item>
+                              <Space wrap>
+                                <Text>{pc.cause}</Text>
+                                <Tag color={pc.status === 'confirmed' ? 'green' : pc.status === 'probable' ? 'blue' : 'orange'}>
+                                  {pc.status}
+                                </Tag>
+                                <Text type="secondary" style={{ fontSize: 12 }}>
+                                  置信度 {Math.round(pc.confidence * 100)}%
+                                </Text>
+                              </Space>
+                            </List.Item>
+                          )}
+                        />
+                      </div>
+                    )}
                     <Row gutter={24}>
                       <Col span={8}>
                         <Statistic
@@ -921,6 +1025,81 @@ export default function RCAAnalysis() {
             )}
           </Card>
 
+          {/* ===== P1-X.10: RCA Recommendations (Investigation / Remediation / Verification) ===== */}
+          {rcaResult && rcaResult.recommendations && rcaResult.recommendations.length > 0 && (
+            <Card
+              title={
+                <Space>
+                  <BulbOutlined style={{ color: '#faad14' }} />
+                  <span>建议操作 ({rcaResult.recommendations.length})</span>
+                  {rcaResult.root_cause_status && rcaResult.root_cause_status !== 'confirmed' && (
+                    <Tag color="orange">根因未确认，修复操作受限</Tag>
+                  )}
+                </Space>
+              }
+              style={{ marginBottom: 16 }}
+            >
+              <Row gutter={16}>
+                {/* Investigation */}
+                <Col span={8}>
+                  <Text strong style={{ color: '#1890ff' }}>调查操作</Text>
+                  <List
+                    size="small"
+                    style={{ marginTop: 8 }}
+                    dataSource={rcaResult.recommendations.filter((r: any) => r.type === 'investigation')}
+                    renderItem={(item: any) => (
+                      <List.Item>
+                        <Space direction="vertical" size={0} style={{ width: '100%' }}>
+                          <Text>{item.title}</Text>
+                          <Text type="secondary" style={{ fontSize: 11 }}>{item.reason}</Text>
+                        </Space>
+                      </List.Item>
+                    )}
+                  />
+                </Col>
+                {/* Remediation */}
+                <Col span={8}>
+                  <Text strong style={{ color: '#cf1322' }}>修复操作</Text>
+                  <List
+                    size="small"
+                    style={{ marginTop: 8 }}
+                    dataSource={rcaResult.recommendations.filter((r: any) => r.type === 'remediation')}
+                    renderItem={(item: any) => (
+                      <List.Item>
+                        <Space direction="vertical" size={0} style={{ width: '100%' }}>
+                          <Space>
+                            <Text delete={!item.allowed}>{item.title}</Text>
+                            {!item.allowed && <Tag color="red">需确认根因后执行</Tag>}
+                            {item.allowed && <Tag color="green">可执行</Tag>}
+                          </Space>
+                          <Text type="secondary" style={{ fontSize: 11 }}>{item.reason}</Text>
+                          <Text type="secondary" style={{ fontSize: 11 }}>风险: {item.risk}</Text>
+                        </Space>
+                      </List.Item>
+                    )}
+                  />
+                </Col>
+                {/* Verification */}
+                <Col span={8}>
+                  <Text strong style={{ color: '#3f8600' }}>验证操作</Text>
+                  <List
+                    size="small"
+                    style={{ marginTop: 8 }}
+                    dataSource={rcaResult.recommendations.filter((r: any) => r.type === 'verification')}
+                    renderItem={(item: any) => (
+                      <List.Item>
+                        <Space direction="vertical" size={0} style={{ width: '100%' }}>
+                          <Text>{item.title}</Text>
+                          <Text type="secondary" style={{ fontSize: 11 }}>{item.reason}</Text>
+                        </Space>
+                      </List.Item>
+                    )}
+                  />
+                </Col>
+              </Row>
+            </Card>
+          )}
+
           {/* ===== AI Analysis Detail ===== */}
           {hasAI && aiResult && (
             <Card
@@ -1035,7 +1214,12 @@ export default function RCAAnalysis() {
           onChanged={() => {
             // Incident 状态变化后刷新当前 RCA 页面数据
             if (selectedIncidentId) {
-              incidentApi.get(selectedIncidentId).then(setIncident).catch(() => {})
+              // P1-X.10 Phase 3.1: 禁止完全空 catch，失败时必须显示错误
+              incidentApi.get(selectedIncidentId)
+                .then(setIncident)
+                .catch((err) => {
+                  setError(err?.message || '刷新事件数据失败')
+                })
             }
           }}
         />

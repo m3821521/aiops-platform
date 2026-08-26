@@ -35,6 +35,7 @@ type TimelineEvent struct {
 // Result 是 RCA 分析结果。
 type Result struct {
 	RootCause        string          `json:"root_cause"`
+	RootCauseStatus  RootCauseStatus `json:"root_cause_status,omitempty"` // P1-X.10: unknown/hypothesis/probable/confirmed
 	Confidence       float64         `json:"confidence"` // 0.0 ~ 1.0
 	AffectedServices []string        `json:"affected_services"`
 	Evidence         []Evidence      `json:"evidence"`
@@ -119,6 +120,7 @@ type PodContainerState struct {
 	LastState    string `json:"last_state,omitempty"`
 	LastReason   string `json:"last_reason,omitempty"`
 	LastExitCode *int32 `json:"last_exit_code,omitempty"`
+	LastFinishedAt string `json:"last_finished_at,omitempty"` // P1-X.10 Phase 6: lastState.terminated.finishedAt
 }
 
 type PodCondition struct {

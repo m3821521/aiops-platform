@@ -129,6 +129,7 @@ export default function Dashboard() {
   const [alerts, setAlerts] = useState<PageResult<AlertType> | null>(null)
   const [activeAnomalyCount, setActiveAnomalyCount] = useState(0)
   const [infraLoading, setInfraLoading] = useState(false)
+  const [infraError, setInfraError] = useState('')
   const [timeRange, setTimeRange] = useState('1h')
   const [cpuSeries, setCpuSeries] = useState<any[]>([])
   const [memSeries, setMemSeries] = useState<any[]>([])
@@ -298,33 +299,56 @@ export default function Dashboard() {
     if (token === refreshTokenRef.current) setLastUpdated(dayjs())
   }, [])
 
-  // === 加载 Infrastructure 数据（保留现有逻辑） ===
+  // === 加载 Infrastructure 数据（P1-X.10 Phase 3.1: 错误不得转换为空数据）===
   const loadInfraData = useCallback(async () => {
     setInfraLoading(true)
+    setInfraError('')
     try {
       const clusterList = await clusterApi.list()
       setClusters(clusterList || [])
       if (clusterList && clusterList.length > 0) {
         const firstCluster = clusterList[0].name
-        const [nodeList, podList, alertData, anomalyData] = await Promise.all([
-          k8sApi.nodes(firstCluster).catch(() => [] as Node[]),
-          k8sApi.pods({ cluster: firstCluster }).catch(() => [] as Pod[]),
-          alertsApi.list({ page: 1, page_size: 100, status: 'firing' }).catch(() => ({ items: [], total: 0, page: 1, page_size: 100 } as PageResult<AlertType>)),
-          anomalyApi.activeCount().catch(() => ({ count: 0 })),
+        // P1-X.10 Phase 3.1: 使用 Promise.allSettled 分别追踪每个 API 的成功/失败
+        // 禁止 .catch(() => []) 将 API 失败转换为空数据
+        const [nodeResult, podResult, alertResult, anomalyResult] = await Promise.allSettled([
+          k8sApi.nodes(firstCluster),
+          k8sApi.pods({ cluster: firstCluster }),
+          alertsApi.list({ page: 1, page_size: 100, status: 'firing' }),
+          anomalyApi.activeCount(),
         ])
-        setNodes(nodeList || [])
-        setPods(podList || [])
-        setAlerts(alertData)
-        setActiveAnomalyCount(anomalyData?.count || 0)
+        const failedSources: string[] = []
+        if (nodeResult.status === 'fulfilled') {
+          setNodes(nodeResult.value || [])
+        } else {
+          failedSources.push('Nodes')
+        }
+        if (podResult.status === 'fulfilled') {
+          setPods(podResult.value || [])
+        } else {
+          failedSources.push('Pods')
+        }
+        if (alertResult.status === 'fulfilled') {
+          setAlerts(alertResult.value)
+        } else {
+          failedSources.push('Alerts')
+        }
+        if (anomalyResult.status === 'fulfilled') {
+          setActiveAnomalyCount(anomalyResult.value?.count || 0)
+        } else {
+          failedSources.push('Anomalies')
+        }
+        if (failedSources.length > 0) {
+          setInfraError(`基础设施数据加载失败: ${failedSources.join(', ')}。当前显示的可能是上次成功获取的数据。`)
+        }
       }
-    } catch {
-      // ignore
+    } catch (err: any) {
+      setInfraError(err?.message || '基础设施数据加载失败')
     } finally {
       setInfraLoading(false)
     }
   }, [])
 
-  // === 加载 Metrics ===
+  // === 加载 Metrics（P1-X.10 Phase 3.1: 部分失败不得标记为全部成功）===
   const loadMetrics = useCallback(async () => {
     if (clusters.length === 0) return
     const mSeq = metricsTrust.beginFetch()
@@ -335,13 +359,35 @@ export default function Dashboard() {
     const startStr = new Date(start * 1000).toISOString()
     const endStr = new Date(end * 1000).toISOString()
     try {
-      const [cpuData, memData] = await Promise.all([
-        metricsApi.range({ query: '100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)', start: startStr, end: endStr, step: '60s' }).catch(() => null),
-        metricsApi.range({ query: '(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100', start: startStr, end: endStr, step: '60s' }).catch(() => null),
+      // P1-X.10 Phase 3.1: 使用 Promise.allSettled，部分失败时标记为 error 而非全部成功
+      const [cpuResult, memResult] = await Promise.allSettled([
+        metricsApi.range({ query: '100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)', start: startStr, end: endStr, step: '60s' }),
+        metricsApi.range({ query: '(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100', start: startStr, end: endStr, step: '60s' }),
       ])
-      if (cpuData?.data?.result?.[0]?.values) setCpuSeries(cpuData.data.result[0].values)
-      if (memData?.data?.result?.[0]?.values) setMemSeries(memData.data.result[0].values)
-      metricsTrust.markSuccess(mSeq)
+      let hasSuccess = false
+      const failedMetrics: string[] = []
+      if (cpuResult.status === 'fulfilled' && cpuResult.value?.data?.result?.[0]?.values) {
+        setCpuSeries(cpuResult.value.data.result[0].values)
+        hasSuccess = true
+      } else {
+        failedMetrics.push('CPU')
+      }
+      if (memResult.status === 'fulfilled' && memResult.value?.data?.result?.[0]?.values) {
+        setMemSeries(memResult.value.data.result[0].values)
+        hasSuccess = true
+      } else {
+        failedMetrics.push('Memory')
+      }
+      if (hasSuccess && failedMetrics.length === 0) {
+        metricsTrust.markSuccess(mSeq)
+      } else if (hasSuccess) {
+        // 部分成功：保留成功数据，标记为 stale/error
+        setMetricsError(`部分监控数据加载失败: ${failedMetrics.join(', ')}`)
+        metricsTrust.markError(mSeq, `部分监控数据加载失败: ${failedMetrics.join(', ')}`)
+      } else {
+        setMetricsError('监控数据不可用')
+        metricsTrust.markError(mSeq, '监控数据不可用')
+      }
     } catch (err: any) {
       setMetricsError('监控数据不可用')
       metricsTrust.markError(mSeq, err?.message || '监控数据不可用')
@@ -801,6 +847,9 @@ export default function Dashboard() {
       >
         {showInfra && (
           <>
+            {infraError && (
+              <Alert type="warning" message={infraError} showIcon style={{ marginBottom: 12 }} />
+            )}
             <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
               <Col xs={12} sm={6}><Statistic title="节点" value={nodes.length} prefix={<NodeIndexOutlined />} /></Col>
               <Col xs={12} sm={6}><Statistic title="Pod" value={pods.length} prefix={<AppstoreOutlined />} suffix={`运行 ${runningPods}`} /></Col>

@@ -94,7 +94,16 @@ func (h *MetricsHandler) Query(c *gin.Context) {
 
 	result, err := h.Prom.Query(c.Request.Context(), query, ts)
 	if err != nil {
-		response.Internal(c, "Prometheus 查询失败: "+err.Error())
+		// P1-X.10 Phase 3.3: Prometheus 失败必须带 provenance，禁止伪装成空数据
+		fetchedAt := time.Now()
+		prov := &response.Provenance{
+			Source:             "prometheus",
+			SourceType:         "provider",
+			FetchedAt:          &fetchedAt,
+			TimestampAvailable: false,
+			TimestampSemantics: "prometheus_query_failed_no_sample_timestamp",
+		}
+		response.InternalWithProvenance(c, "Prometheus 查询失败: "+err.Error(), prov)
 		return
 	}
 
@@ -146,7 +155,16 @@ func (h *MetricsHandler) QueryRange(c *gin.Context) {
 
 	result, err := h.Prom.QueryRange(c.Request.Context(), query, start, end, step)
 	if err != nil {
-		response.Internal(c, "Prometheus 范围查询失败: "+err.Error())
+		// P1-X.10 Phase 3.3: Prometheus 范围查询失败必须带 provenance
+		fetchedAt := time.Now()
+		prov := &response.Provenance{
+			Source:             "prometheus",
+			SourceType:         "provider",
+			FetchedAt:          &fetchedAt,
+			TimestampAvailable: false,
+			TimestampSemantics: "prometheus_range_query_failed_no_sample_timestamp",
+		}
+		response.InternalWithProvenance(c, "Prometheus 范围查询失败: "+err.Error(), prov)
 		return
 	}
 
@@ -171,7 +189,17 @@ func (h *MetricsHandler) QueryRange(c *gin.Context) {
 func (h *MetricsHandler) ListNodes(c *gin.Context) {
 	result, err := h.Prom.NodeMetrics(c.Request.Context())
 	if err != nil {
-		response.OK(c, []any{})
+		// P1-X.10 Phase 3.3: 禁止把 Prometheus 失败伪装成 HTTP 200 + 空数组
+		// Empty Data ≠ Error，必须返回 500 + provenance
+		fetchedAt := time.Now()
+		prov := &response.Provenance{
+			Source:             "prometheus",
+			SourceType:         "provider",
+			FetchedAt:          &fetchedAt,
+			TimestampAvailable: false,
+			TimestampSemantics: "prometheus_node_metrics_query_failed",
+		}
+		response.InternalWithProvenance(c, "Prometheus 节点指标查询失败: "+err.Error(), prov)
 		return
 	}
 	response.OK(c, result)
@@ -188,7 +216,16 @@ func (h *MetricsHandler) ListPods(c *gin.Context) {
 	}
 	result, err := h.Prom.PodMetrics(c.Request.Context(), namespace)
 	if err != nil {
-		response.OK(c, []any{})
+		// P1-X.10 Phase 3.3: 禁止把 Prometheus 失败伪装成 HTTP 200 + 空数组
+		fetchedAt := time.Now()
+		prov := &response.Provenance{
+			Source:             "prometheus",
+			SourceType:         "provider",
+			FetchedAt:          &fetchedAt,
+			TimestampAvailable: false,
+			TimestampSemantics: "prometheus_pod_metrics_query_failed",
+		}
+		response.InternalWithProvenance(c, "Prometheus Pod 指标查询失败: "+err.Error(), prov)
 		return
 	}
 	response.OK(c, result)
