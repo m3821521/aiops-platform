@@ -16,6 +16,7 @@ import (
 	"github.com/aiops/aiops-platform/internal/incident"
 	"github.com/aiops/aiops-platform/internal/middleware"
 	"github.com/aiops/aiops-platform/internal/redisutil"
+	"github.com/aiops/aiops-platform/internal/servicehealth"
 	"github.com/aiops/aiops-platform/internal/topology"
 	"github.com/aiops/aiops-platform/internal/workflow"
 	"github.com/gin-gonic/gin"
@@ -53,6 +54,7 @@ type Deps struct {
 	IncidentRCA *handler.IncidentRCAHandler
 	IncidentAI  *ai.IncidentAIHandler
 	Topology   *topology.Handler
+	ServiceHealth *servicehealth.Handler
 	RateLimit  *redisutil.RateLimiter
 }
 
@@ -330,6 +332,17 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 			v1.GET("/topology/dependencies/:type/:name", deps.Topology.GetDependencies)
 			v1.GET("/topology/impact/:type/:name", deps.Topology.GetImpact)
 			v1.POST("/topology/cache/invalidate", auth.RequirePermission("topology", "write"), deps.Topology.InvalidateCache)
+		}
+
+		// P2-01 Phase 2: Service Health — Service Model & Kubernetes Discovery
+		// P2-01 Phase 3: Health Signal Collector
+		// P2-01 Phase 5: Service Health API
+		if deps.ServiceHealth != nil {
+			v1.GET("/platform/services", auth.RequirePermission("services", "read"), deps.ServiceHealth.List)
+			v1.GET("/platform/services/:id", auth.RequirePermission("services", "read"), deps.ServiceHealth.Get)
+			v1.POST("/platform/services/sync", auth.RequirePermission("services", "write"), deps.ServiceHealth.Sync)
+			v1.GET("/platform/services/:id/signals", auth.RequirePermission("services", "read"), deps.ServiceHealth.Signals)
+			v1.GET("/platform/services/:id/health", auth.RequirePermission("services", "read"), deps.ServiceHealth.Health)
 		}
 	}
 

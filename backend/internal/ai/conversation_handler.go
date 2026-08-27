@@ -2,9 +2,11 @@ package ai
 
 import (
 	"context"
+	"log/slog"
 	"strconv"
 	"time"
 
+	"github.com/aiops/aiops-platform/pkg/response"
 	"github.com/gin-gonic/gin"
 )
 
@@ -18,12 +20,26 @@ func NewConversationHandler(repo *ConversationRepository) *ConversationHandler {
 	return &ConversationHandler{Repo: repo}
 }
 
+// getAuthenticatedUserID 从 gin context 中提取当前认证用户 ID。
+// 如果未认证（user_id 不存在或为 0），返回 (0, false)。
+func getAuthenticatedUserID(c *gin.Context) (int64, bool) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		return 0, false
+	}
+	uid, ok := userID.(int64)
+	if !ok || uid <= 0 {
+		return 0, false
+	}
+	return uid, true
+}
+
 // ListConversations 处理 GET /api/v1/ai/conversations。
 func (h *ConversationHandler) ListConversations(c *gin.Context) {
-	userID, _ := c.Get("user_id")
-	uid, _ := userID.(int64)
-	if uid == 0 {
-		uid = 1 // 默认 admin 用户
+	uid, ok := getAuthenticatedUserID(c)
+	if !ok {
+		response.Unauthorized(c, "未登录或登录已过期")
+		return
 	}
 
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -37,88 +53,83 @@ func (h *ConversationHandler) ListConversations(c *gin.Context) {
 
 	convs, total, err := h.Repo.ListByUser(c.Request.Context(), uid, page, pageSize)
 	if err != nil {
-		c.JSON(500, gin.H{"code": "INTERNAL_ERROR", "message": "查询对话列表失败"})
+		slog.Error("ai: list conversations failed", "user_id", uid, "err", err)
+		response.Internal(c, "查询对话列表失败")
 		return
 	}
 
-	c.JSON(200, gin.H{
-		"code": "OK",
-		"data": gin.H{
-			"items": convs,
-			"total": total,
-			"page":  page,
-			"page_size": pageSize,
-		},
+	response.OK(c, gin.H{
+		"items":     convs,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
 	})
 }
 
 // GetConversation 处理 GET /api/v1/ai/conversations/:id。
 func (h *ConversationHandler) GetConversation(c *gin.Context) {
+	uid, ok := getAuthenticatedUserID(c)
+	if !ok {
+		response.Unauthorized(c, "未登录或登录已过期")
+		return
+	}
+
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(400, gin.H{"code": "BAD_REQUEST", "message": "无效的对话 ID"})
+		response.BadRequest(c, "无效的对话 ID")
 		return
 	}
 
-	conv, err := h.Repo.GetByID(c.Request.Context(), id)
+	// 使用 GetByIDAndUser 防止 IDOR：不存在或不属于当前用户都返回 404。
+	conv, err := h.Repo.GetByIDAndUser(c.Request.Context(), id, uid)
 	if err != nil {
-		c.JSON(404, gin.H{"code": "NOT_FOUND", "message": "对话不存在"})
-		return
-	}
-
-	// 验证所有权。
-	userID, _ := c.Get("user_id")
-	uid, _ := userID.(int64)
-	if uid != 0 && conv.UserID != uid {
-		c.JSON(403, gin.H{"code": "FORBIDDEN", "message": "无权访问此对话"})
+		response.NotFound(c, "对话不存在")
 		return
 	}
 
 	msgs, err := h.Repo.GetMessages(c.Request.Context(), id)
 	if err != nil {
-		c.JSON(500, gin.H{"code": "INTERNAL_ERROR", "message": "查询消息失败"})
+		slog.Error("ai: get conversation messages failed", "conversation_id", id, "err", err)
+		response.Internal(c, "查询对话消息失败")
 		return
 	}
 
-	c.JSON(200, gin.H{
-		"code": "OK",
-		"data": gin.H{
-			"conversation": conv,
-			"messages":     msgs,
-		},
+	response.OK(c, gin.H{
+		"conversation": conv,
+		"messages":     msgs,
 	})
 }
 
 // DeleteConversation 处理 DELETE /api/v1/ai/conversations/:id。
 func (h *ConversationHandler) DeleteConversation(c *gin.Context) {
+	uid, ok := getAuthenticatedUserID(c)
+	if !ok {
+		response.Unauthorized(c, "未登录或登录已过期")
+		return
+	}
+
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(400, gin.H{"code": "BAD_REQUEST", "message": "无效的对话 ID"})
+		response.BadRequest(c, "无效的对话 ID")
 		return
 	}
 
-	conv, err := h.Repo.GetByID(c.Request.Context(), id)
-	if err != nil {
-		c.JSON(404, gin.H{"code": "NOT_FOUND", "message": "对话不存在"})
-		return
-	}
-
-	userID, _ := c.Get("user_id")
-	uid, _ := userID.(int64)
-	if uid != 0 && conv.UserID != uid {
-		c.JSON(403, gin.H{"code": "FORBIDDEN", "message": "无权删除此对话"})
+	// 先验证所有权，防止 IDOR 删除他人对话。
+	if _, err := h.Repo.GetByIDAndUser(c.Request.Context(), id, uid); err != nil {
+		response.NotFound(c, "对话不存在")
 		return
 	}
 
 	if err := h.Repo.Delete(c.Request.Context(), id); err != nil {
-		c.JSON(500, gin.H{"code": "INTERNAL_ERROR", "message": "删除对话失败"})
+		slog.Error("ai: delete conversation failed", "conversation_id", id, "user_id", uid, "err", err)
+		response.Internal(c, "删除对话失败")
 		return
 	}
 
-	c.JSON(200, gin.H{"code": "OK", "message": "对话已删除"})
+	response.OK(c, gin.H{"message": "对话已删除"})
 }
 
-// CreateConversation 创建新对话（内部使用）。
+// CreateConversation 创建新对话（内部使用，由 AIHandler 在 ask 时调用）。
 func (h *ConversationHandler) CreateConversation(ctx context.Context, userID int64, title string, incidentID *int64) (*Conversation, error) {
 	conv := &Conversation{
 		UserID:     userID,

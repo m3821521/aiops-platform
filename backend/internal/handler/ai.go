@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -11,6 +14,60 @@ import (
 	"github.com/aiops/aiops-platform/pkg/response"
 	"github.com/gin-gonic/gin"
 )
+
+// aiAskTimeout 是 AI ask 请求的整体超时。
+// 设置为 25s，在 Frontend Axios 30s timeout 之前返回友好错误，
+// 避免用户看到 "timeout of 30000ms exceeded" 这种不友好的技术错误。
+const aiAskTimeout = 25 * time.Second
+
+// handleAIError 将 AI Engine/Assistant 的错误转换为用户可理解的 HTTP 响应。
+// 区分：overall timeout / client canceled / LLM timeout / 普通错误。
+// 返回 true 表示已经处理并写入响应，调用方应 return。
+func handleAIError(c *gin.Context, err error, askCtx context.Context) bool {
+	if err == nil {
+		return false
+	}
+
+	// 1. Overall request timeout（25s deadline exceeded）
+	if errors.Is(err, tools.ErrRequestTimeout) || askCtx.Err() == context.DeadlineExceeded {
+		slog.Warn("ai: request timeout", "err", err.Error())
+		response.ServiceUnavailable(c, "AI 请求超时（25秒），问题可能过于复杂。请尝试简化问题或缩小范围后重试")
+		return true
+	}
+
+	// 2. Client canceled（浏览器/Axios 主动断开）
+	if errors.Is(err, tools.ErrRequestCanceled) || askCtx.Err() == context.Canceled {
+		slog.Info("ai: request canceled by client", "err", err.Error())
+		// 客户端已断开，不需要返回完整响应；使用 499 Client Closed Request 语义
+		c.Status(499)
+		return true
+	}
+
+	// 3. LLM timeout（provider 调用超时，但 overall context 可能还有时间）
+	if errors.Is(err, tools.ErrLLMTimeout) {
+		slog.Warn("ai: LLM timeout", "err", err.Error())
+		response.ServiceUnavailable(c, "AI 模型响应超时，请稍后重试")
+		return true
+	}
+
+	// 4. Tool timeout（单个 Tool 超时，通常 Engine 内部已处理，这里是兜底）
+	if errors.Is(err, tools.ErrToolTimeout) {
+		slog.Warn("ai: tool timeout", "err", err.Error())
+		response.ServiceUnavailable(c, "AI 工具调用超时，请稍后重试")
+		return true
+	}
+
+	// 5. 普通错误：不暴露内部细节和 API Key
+	errMsg := err.Error()
+	if strings.Contains(errMsg, "API Key") || strings.Contains(errMsg, "权限") {
+		response.BadRequest(c, errMsg)
+		return true
+	}
+
+	slog.Error("ai: request failed", "err", err)
+	response.ServiceUnavailable(c, "AI 服务暂时不可用: "+errMsg)
+	return true
+}
 
 // AIHandler 处理 AI 助手请求。
 type AIHandler struct {
@@ -66,6 +123,10 @@ func (h *AIHandler) Ask(c *gin.Context) {
 		return
 	}
 
+	// AI 请求整体超时：在 Frontend 30s timeout 之前返回友好错误。
+	askCtx, cancel := context.WithTimeout(c.Request.Context(), aiAskTimeout)
+	defer cancel()
+
 	// 获取用户 ID。
 	userID, _ := c.Get("user_id")
 	uid, _ := userID.(int64)
@@ -74,8 +135,8 @@ func (h *AIHandler) Ask(c *gin.Context) {
 	var convID int64
 	if h.ConversationHdl != nil && uid > 0 {
 		if req.ConversationID > 0 {
-			// 验证现有对话所有权。
-			conv, err := h.ConversationHdl.Repo.GetByID(c.Request.Context(), req.ConversationID)
+			// 验证现有对话所有权（防止 IDOR）。
+			conv, err := h.ConversationHdl.Repo.GetByIDAndUser(askCtx, req.ConversationID, uid)
 			if err != nil || conv.UserID != uid {
 				response.Forbidden(c, "无权访问此对话")
 				return
@@ -91,7 +152,7 @@ func (h *AIHandler) Ask(c *gin.Context) {
 			if req.IncidentID > 0 {
 				incidentID = &req.IncidentID
 			}
-			conv, err := h.ConversationHdl.CreateConversation(c.Request.Context(), uid, title, incidentID)
+			conv, err := h.ConversationHdl.CreateConversation(askCtx, uid, title, incidentID)
 			if err == nil {
 				convID = conv.ID
 			}
@@ -105,7 +166,7 @@ func (h *AIHandler) Ask(c *gin.Context) {
 				Content:        req.Question,
 				CreatedAt:      time.Now(),
 			}
-			_ = h.ConversationHdl.Repo.AddMessage(c.Request.Context(), userMsg)
+			_ = h.ConversationHdl.Repo.AddMessage(askCtx, userMsg)
 		}
 	}
 
@@ -119,8 +180,11 @@ func (h *AIHandler) Ask(c *gin.Context) {
 	// 如果有 incident_id 且 Engine 可用，使用 Tool Calling Engine。
 	if req.IncidentID > 0 && h.Engine != nil {
 		incidentContext := fmt.Sprintf("Incident ID: %d", req.IncidentID)
-		result, err := h.Engine.Ask(c.Request.Context(), req.Question, incidentContext)
+		result, err := h.Engine.Ask(askCtx, req.Question, incidentContext)
 		if err != nil {
+			if handleAIError(c, err, askCtx) {
+				return
+			}
 			response.Internal(c, "AI 分析失败: "+err.Error())
 			return
 		}
@@ -130,7 +194,7 @@ func (h *AIHandler) Ask(c *gin.Context) {
 			requestID := c.GetString("request_id")
 			for _, call := range result.ToolCalls {
 				record := tools.RecordFromToolCall(call, requestID, req.IncidentID, uid)
-				_ = h.AuditRepo.Create(c.Request.Context(), record)
+				_ = h.AuditRepo.Create(askCtx, record)
 			}
 		}
 
@@ -152,7 +216,7 @@ func (h *AIHandler) Ask(c *gin.Context) {
 				DurationMs:     result.Duration.Milliseconds(),
 				CreatedAt:      time.Now(),
 			}
-			_ = h.ConversationHdl.Repo.AddMessage(c.Request.Context(), assistantMsg)
+			_ = h.ConversationHdl.Repo.AddMessage(askCtx, assistantMsg)
 		}
 
 		response.OK(c, gin.H{
@@ -175,15 +239,12 @@ func (h *AIHandler) Ask(c *gin.Context) {
 		Service:  req.Service,
 		Duration: req.Duration,
 	}
-	result, err := h.Assistant.Ask(c.Request.Context(), aiReq)
+	result, err := h.Assistant.Ask(askCtx, aiReq)
 	if err != nil {
-		// 返回友好的错误信息，不泄露内部细节和 API Key
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "API Key") || strings.Contains(errMsg, "权限") {
-			response.BadRequest(c, errMsg)
-		} else {
-			response.ServiceUnavailable(c, "AI 服务暂时不可用: "+errMsg)
+		if handleAIError(c, err, askCtx) {
+			return
 		}
+		response.ServiceUnavailable(c, "AI 服务暂时不可用: "+err.Error())
 		return
 	}
 
@@ -196,7 +257,7 @@ func (h *AIHandler) Ask(c *gin.Context) {
 			Summary:        result.Context,
 			CreatedAt:      time.Now(),
 		}
-		_ = h.ConversationHdl.Repo.AddMessage(c.Request.Context(), assistantMsg)
+		_ = h.ConversationHdl.Repo.AddMessage(askCtx, assistantMsg)
 	}
 
 	response.OK(c, gin.H{

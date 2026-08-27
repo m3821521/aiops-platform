@@ -172,6 +172,10 @@ export default function AIAssistant() {
   const [aiConfig, setAiConfig] = useState<AIConfigResponse | null>(null)
   const [configForm] = Form.useForm()
   const scrollRef = useRef<HTMLDivElement>(null)
+  // 历史对话加载状态：loadingId 标记当前正在加载的对话 ID，用于防竞态和 UI 反馈
+  const [historyLoadingId, setHistoryLoadingId] = useState<number | null>(null)
+  // 递增的请求序号，用于防止快速切换历史对话时旧请求覆盖新请求
+  const loadSeqRef = useRef(0)
 
   useEffect(() => {
     loadConversations()
@@ -184,8 +188,9 @@ export default function AIAssistant() {
     try {
       const res = await aiApi.getConfig()
       setAiConfig(res)
-    } catch (e) {
-      // 静默失败
+    } catch (e: any) {
+      // 配置加载失败不阻塞主功能，但记录日志便于排查
+      console.warn('[AI] 加载配置失败:', e?.message || e)
     }
   }
 
@@ -274,21 +279,41 @@ export default function AIAssistant() {
     try {
       const res = await aiApi.listConversations(1, 50)
       setConversations(res.items || [])
-    } catch (e) {
-      // 静默失败
+    } catch (e: any) {
+      const errMsg = e?.response?.data?.message || e?.message || '加载历史对话失败'
+      console.error('[AI] 加载对话列表失败:', errMsg)
+      // 不使用 message.error 弹窗，因为页面初始化时可能频繁触发；在 UI 中显示空状态即可
+      setConversations([])
     }
   }
 
   const newConversation = () => {
+    const hadContent = messages.length > 0
     setMessages([])
     setConversationId(undefined)
     setDrawerOpen(false)
+    setHistoryLoadingId(null)
+    // 仅在之前有内容时提示，避免空状态下频繁操作产生骚扰
+    if (hadContent) {
+      message.success('已开始新对话')
+    }
+    // 聚焦输入框，让用户明确感知可以开始输入
+    setTimeout(() => {
+      const inputEl = document.querySelector('.ai-chat-input textarea') as HTMLTextAreaElement | null
+      inputEl?.focus()
+    }, 50)
   }
 
   const loadConversation = async (id: number) => {
+    // 防竞态：递增请求序号，旧请求返回时如果序号不匹配则丢弃
+    const mySeq = ++loadSeqRef.current
+    setHistoryLoadingId(id)
     try {
       const res = await aiApi.getConversation(id)
-      setConversationId(id)
+      // 如果在请求期间用户切换了其他对话，丢弃旧结果
+      if (mySeq !== loadSeqRef.current) {
+        return
+      }
       const msgs: ChatMessage[] = (res.messages || []).map((m) => ({
         id: m.id.toString(),
         role: m.role,
@@ -298,22 +323,35 @@ export default function AIAssistant() {
         confidence: m.confidence,
         timestamp: new Date(m.created_at).getTime(),
       }))
+      setConversationId(id)
       setMessages(msgs)
       setDrawerOpen(false)
-    } catch (e) {
-      // 静默失败
+    } catch (e: any) {
+      if (mySeq !== loadSeqRef.current) {
+        return
+      }
+      const errMsg = e?.response?.data?.message || e?.message || '加载对话失败'
+      console.error('[AI] 加载对话失败:', errMsg)
+      message.error(errMsg)
+    } finally {
+      if (mySeq === loadSeqRef.current) {
+        setHistoryLoadingId(null)
+      }
     }
   }
 
   const deleteConversation = async (id: number) => {
     try {
       await aiApi.deleteConversation(id)
+      message.success('对话已删除')
       if (conversationId === id) {
         newConversation()
       }
       loadConversations()
-    } catch (e) {
-      // 静默失败
+    } catch (e: any) {
+      const errMsg = e?.response?.data?.message || e?.message || '删除对话失败'
+      console.error('[AI] 删除对话失败:', errMsg)
+      message.error(errMsg)
     }
   }
 
@@ -361,7 +399,14 @@ export default function AIAssistant() {
         ),
       )
     } catch (err: any) {
-      const errorMsg = err?.response?.data?.message || err?.message || 'AI 请求失败'
+      // 将技术错误转换为用户友好的提示
+      let errorMsg = err?.response?.data?.message || err?.message || 'AI 请求失败'
+      if (err?.code === 'ECONNABORTED' || errorMsg?.includes('timeout') || errorMsg?.includes('超时')) {
+        errorMsg = 'AI 响应超时，问题可能过于复杂。请尝试简化问题或缩小范围后重试'
+      } else if (err?.response?.status === 503) {
+        errorMsg = err?.response?.data?.message || 'AI 服务暂时不可用，请稍后重试'
+      }
+      console.error('[AI] ask failed:', err)
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantMsg.id
@@ -656,11 +701,15 @@ export default function AIAssistant() {
               >
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    <MessageOutlined style={{ marginRight: 6, color: 'var(--text-muted)' }} />
+                    {historyLoadingId === conv.id ? (
+                      <Spin size="small" style={{ marginRight: 6 }} />
+                    ) : (
+                      <MessageOutlined style={{ marginRight: 6, color: 'var(--text-muted)' }} />
+                    )}
                     {conv.title || '新对话'}
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                    {conv.message_count} 条消息 · {new Date(conv.updated_at).toLocaleDateString()}
+                    {historyLoadingId === conv.id ? '加载中...' : `${conv.message_count} 条消息 · ${new Date(conv.updated_at).toLocaleDateString()}`}
                   </div>
                 </div>
                 <Popconfirm
@@ -774,6 +823,7 @@ export default function AIAssistant() {
               autoSize={{ minRows: 1, maxRows: 4 }}
               style={{ flex: 1, borderRadius: 8 }}
               disabled={loading}
+              className="ai-chat-input"
             />
             <Button
               type="primary"
@@ -809,7 +859,7 @@ export default function AIAssistant() {
             renderItem={(item) => (
               <List.Item
                 onClick={() => loadConversation(item.id)}
-                style={{ cursor: 'pointer' }}
+                style={{ cursor: 'pointer', opacity: historyLoadingId === item.id ? 0.6 : 1 }}
                 actions={[
                   <Popconfirm
                     key="delete"
@@ -823,9 +873,9 @@ export default function AIAssistant() {
                 ]}
               >
                 <List.Item.Meta
-                  avatar={<Avatar icon={<MessageOutlined />} size="small" />}
+                  avatar={historyLoadingId === item.id ? <Spin size="small" /> : <Avatar icon={<MessageOutlined />} size="small" />}
                   title={item.title || '新对话'}
-                  description={`${item.message_count} 条消息`}
+                  description={historyLoadingId === item.id ? '加载中...' : `${item.message_count} 条消息`}
                 />
               </List.Item>
             )}

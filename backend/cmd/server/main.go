@@ -32,6 +32,9 @@ import (
 	"github.com/aiops/aiops-platform/internal/rca"
 	"github.com/aiops/aiops-platform/internal/redisutil"
 	"github.com/aiops/aiops-platform/internal/secret"
+	"github.com/aiops/aiops-platform/internal/servicehealth"
+	"github.com/aiops/aiops-platform/internal/servicehealth/health"
+	"github.com/aiops/aiops-platform/internal/servicehealth/signals"
 	"github.com/aiops/aiops-platform/internal/topology"
 	"github.com/aiops/aiops-platform/internal/workflow"
 	"github.com/aiops/aiops-platform/pkg/logger"
@@ -68,22 +71,34 @@ func main() {
 
 	// Prometheus 是可选依赖：创建失败只警告，不影响进程启动。
 	// 用 Redis 缓存包装查询结果，降低 Prometheus 压力。
+	// P2-CONNECTION-DEFAULT-001: 未配置 Prometheus 时使用 unavailableQuerier，
+	// 返回明确的"Prometheus 未配置"错误，不访问 127.0.0.1:9090。
 	var metricsHandler *handler.MetricsHandler
 	var anomalyHandler *handler.AnomalyHandler
 	var anomalyService *anomaly.Service
 	var anomalyScheduler *anomaly.Scheduler
 	var querier monitoring.Querier
-	promClient, err := monitoring.NewClient(cfg.Prometheus.Address, time.Duration(cfg.Prometheus.Timeout)*time.Second)
-	if err != nil {
-		slog.Warn("prometheus client disabled", "err", err)
+
+	if cfg.Prometheus.Address != "" {
+		promClient, err := monitoring.NewClient(cfg.Prometheus.Address, time.Duration(cfg.Prometheus.Timeout)*time.Second)
+		if err != nil {
+			slog.Warn("prometheus client disabled", "err", err)
+			querier = &unavailablePrometheusQuerier{reason: fmt.Sprintf("Prometheus client 创建失败: %v", err)}
+		} else {
+			querier = monitoring.NewCachedQuerier(promClient, rdb)
+			slog.Info("prometheus connected", "addr", cfg.Prometheus.Address)
+		}
 	} else {
-		querier = monitoring.NewCachedQuerier(promClient, rdb)
-		metricsHandler = &handler.MetricsHandler{Prom: querier}
-		anomalyRepo := anomaly.NewRepository(db)
-		anomalyService = anomaly.NewServiceWithRepo(querier, anomalyRepo)
-		anomalyHandler = &handler.AnomalyHandler{Service: anomalyService, Repo: anomalyRepo}
-		slog.Info("prometheus connected", "addr", cfg.Prometheus.Address)
+		// 未配置 Prometheus：使用 unavailable querier，不产生任何 HTTP 请求
+		querier = &unavailablePrometheusQuerier{reason: "Prometheus 未配置"}
+		slog.Info("prometheus not configured, metrics/anomaly APIs will return configuration error")
 	}
+
+	// metricsHandler 和 anomalyService 始终初始化（使用 querier，可能是 unavailable）
+	metricsHandler = &handler.MetricsHandler{Prom: querier}
+	anomalyRepo := anomaly.NewRepository(db)
+	anomalyService = anomaly.NewServiceWithRepo(querier, anomalyRepo)
+	anomalyHandler = &handler.AnomalyHandler{Service: anomalyService, Repo: anomalyRepo}
 
 	alertRepo := alert.NewRepository(db)
 	alertAggregator := alert.NewAggregator(alertRepo)
@@ -97,7 +112,7 @@ func main() {
 
 	// 数据库迁移（开发环境使用 AutoMigrate，未来替换为 versioned migration）。
 	migrator := migration.NewGormMigrator(db)
-	if err := migrator.Migrate(&incident.Incident{}, &incident.IncidentSignal{}, &anomaly.AnomalyRecord{}, &rca.IncidentAnalysis{}, &ai.AIAnalysisRecord{}, &ai.Conversation{}, &ai.ConversationMessage{}, &ai.AIConfig{}, &tools.ToolAuditRecord{}, &automation.Action{}, &automation.ActionExecution{}, &automation.AutomationAudit{}, &workflow.Workflow{}, &workflow.WorkflowStep{}, &workflow.WorkflowExecution{}, &workflow.WorkflowStepExecution{}, &connection.Connection{}, &connection.Credential{}); err != nil {
+	if err := migrator.Migrate(&incident.Incident{}, &incident.IncidentSignal{}, &anomaly.AnomalyRecord{}, &rca.IncidentAnalysis{}, &ai.AIAnalysisRecord{}, &ai.Conversation{}, &ai.ConversationMessage{}, &ai.AIConfig{}, &tools.ToolAuditRecord{}, &automation.Action{}, &automation.ActionExecution{}, &automation.AutomationAudit{}, &workflow.Workflow{}, &workflow.WorkflowStep{}, &workflow.WorkflowExecution{}, &workflow.WorkflowStepExecution{}, &connection.Connection{}, &connection.Credential{}, &servicehealth.Service{}); err != nil {
 		slog.Warn("migration failed", "err", err)
 	}
 
@@ -124,8 +139,15 @@ func main() {
 
 	// P1-X.10 Phase 6: Legacy RCA Engine 已废弃，统一使用 Pipeline。
 	// rcaEngine := rca.NewEngine() // 保留代码供参考，不再初始化
-	esClient := logging.NewClient(cfg.Elasticsearch.Address, cfg.Elasticsearch.Index,
-		cfg.Elasticsearch.Username, cfg.Elasticsearch.Password, cfg.Elasticsearch.Timeout)
+	// P2-CONNECTION-DEFAULT-001 Phase 2: 未配置 Elasticsearch 时不创建 client，
+	// 避免隐式访问 127.0.0.1:9200。LogsHandler/AI tools 均有 nil 检查。
+	var esClient *logging.Client
+	if cfg.Elasticsearch.Address != "" {
+		esClient = logging.NewClient(cfg.Elasticsearch.Address, cfg.Elasticsearch.Index,
+			cfg.Elasticsearch.Username, cfg.Elasticsearch.Password, cfg.Elasticsearch.Timeout)
+	} else {
+		slog.Info("elasticsearch not configured, logs/AI search will return configuration error")
+	}
 	logAnalyzer := logging.NewAnalyzer(10, 1*time.Hour)
 
 	// AI 助手（可选）。
@@ -317,15 +339,48 @@ func main() {
 	clusterSvc := cluster.NewService(mgr)
 	automationEngine := automation.NewEngine(clusterSvc)
 
+	// P2-01 Phase 2: Service Health — Service Model & Kubernetes Discovery
+	// P2-01 Phase 3: Health Signal Collector
+	// P2-01 Phase 5: Service Health API
+	serviceHealthRepo := servicehealth.NewRepository(db)
+	serviceHealthDiscovery := servicehealth.NewDiscoveryService(clusterSvc)
+
+	// Signal Collectors：从 K8s/Prometheus/Alert/ES/Topology 采集 Health Signals，
+	// 统一转换为 rca.Evidence，支持 partial failure。
+	// 各 Collector 内部处理 nil 依赖（返回 empty，不是 error）。
+	signalCollectors := []signals.SignalCollector{
+		signals.NewKubernetesSignalCollector(clusterSvc, 3),
+		signals.NewPrometheusSignalCollector(querier, 5*time.Minute),
+		signals.NewAlertSignalCollector(alertRepo),
+		signals.NewLogSignalCollector(esClient, 5*time.Minute),
+		signals.NewTopologySignalCollector(topologyService),
+	}
+	signalMgr := signals.NewSignalCollectorManager(signalCollectors, 0)
+
+	// Health Evaluator：Phase 4 Health Evaluation Engine，纯函数，不修改输入。
+	healthEvaluator := health.NewDefaultEvaluator()
+
+	serviceHealthMgr := servicehealth.NewManager(serviceHealthRepo, serviceHealthDiscovery, signalMgr, healthEvaluator)
+	serviceHealthHandler := servicehealth.NewHandler(serviceHealthMgr)
+	slog.Info("service health initialized")
+
 	// P5-C4: Jenkins Provider 迁移
-	jenkinsClient := automation.NewJenkinsClient(cfg.Jenkins.URL, cfg.Jenkins.Username, cfg.Jenkins.Token, cfg.Jenkins.Timeout)
+	// P2-CONNECTION-DEFAULT-001 Phase 2: 未配置时不创建 client，避免隐式访问默认地址
+	var jenkinsClient *automation.JenkinsClient
+	if cfg.Jenkins.URL != "" {
+		jenkinsClient = automation.NewJenkinsClient(cfg.Jenkins.URL, cfg.Jenkins.Username, cfg.Jenkins.Token, cfg.Jenkins.Timeout)
+	}
 	if connJenkinsClient, err := providerFactory.BuildJenkinsClient(context.Background()); err == nil && connJenkinsClient != nil {
 		jenkinsClient = connJenkinsClient
 		slog.Info("jenkins client migrated to provider factory")
 	}
 
 	// P5-C5: ArgoCD Provider 迁移
-	argocdClient := automation.NewArgoCDClient(cfg.ArgoCD.URL, cfg.ArgoCD.Token, cfg.ArgoCD.Timeout)
+	// P2-CONNECTION-DEFAULT-001 Phase 2: 未配置时不创建 client，避免隐式访问默认地址
+	var argocdClient *automation.ArgoCDClient
+	if cfg.ArgoCD.URL != "" {
+		argocdClient = automation.NewArgoCDClient(cfg.ArgoCD.URL, cfg.ArgoCD.Token, cfg.ArgoCD.Timeout)
+	}
 	if connArgoCDClient, err := providerFactory.BuildArgoCDClient(context.Background()); err == nil && connArgoCDClient != nil {
 		argocdClient = connArgoCDClient
 		slog.Info("argocd client migrated to provider factory")
@@ -559,6 +614,7 @@ func main() {
 		IncidentRCA: incidentRCAHandler,
 		IncidentAI:  incidentAIHandler,
 		Topology:   topologyHandler,
+		ServiceHealth: serviceHealthHandler,
 		RateLimit:  rateLimiter,
 	})
 
@@ -1507,4 +1563,27 @@ func buildMetricQueries(resourceType, resourceName, namespace string) map[string
 		queries["node_memory"] = fmt.Sprintf(`(1 - node_memory_MemAvailable_bytes{instance=~"%s.*"} / node_memory_MemTotal_bytes{instance=~"%s.*"}) * 100`, resourceName, resourceName)
 	}
 	return queries
+}
+
+// unavailablePrometheusQuerier 是 Prometheus 未配置时使用的安全占位实现。
+// P2-CONNECTION-DEFAULT-001: 所有方法返回明确的配置缺失错误，不产生任何 HTTP 请求，
+// 不访问 127.0.0.1:9090，避免隐式 fallback 到 localhost。
+type unavailablePrometheusQuerier struct {
+	reason string
+}
+
+func (q *unavailablePrometheusQuerier) Query(ctx context.Context, query string, ts time.Time) (*monitoring.QueryResult, error) {
+	return nil, fmt.Errorf("%s", q.reason)
+}
+
+func (q *unavailablePrometheusQuerier) QueryRange(ctx context.Context, query string, start, end time.Time, step time.Duration) (*monitoring.QueryResult, error) {
+	return nil, fmt.Errorf("%s", q.reason)
+}
+
+func (q *unavailablePrometheusQuerier) NodeMetrics(ctx context.Context) (*monitoring.NodeMetrics, error) {
+	return nil, fmt.Errorf("%s", q.reason)
+}
+
+func (q *unavailablePrometheusQuerier) PodMetrics(ctx context.Context, namespace string) (*monitoring.PodMetrics, error) {
+	return nil, fmt.Errorf("%s", q.reason)
 }

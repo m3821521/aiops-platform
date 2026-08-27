@@ -147,13 +147,16 @@ func Load(path string) (*Config, error) {
 		cfg.Cluster.ConfigPath = "configs/clusters.yaml"
 	}
 	if cfg.Prometheus.Address == "" {
-		cfg.Prometheus.Address = "http://127.0.0.1:9090"
+		// P2-CONNECTION-DEFAULT-001: 不再设置隐式默认地址。
+		// 未配置时 Address 保持为空，由上层判断并返回明确的"Prometheus 未配置"错误。
+		// 显式配置示例: prometheus.address: http://your-prometheus:9090
 	}
 	if cfg.Prometheus.Timeout <= 0 {
 		cfg.Prometheus.Timeout = 30
 	}
 	if cfg.Elasticsearch.Address == "" {
-		cfg.Elasticsearch.Address = "http://127.0.0.1:9200"
+		// P2-CONNECTION-DEFAULT-001 Phase 2: 不再设置隐式默认地址。
+		// 未配置时 Address 保持为空，由上层判断并返回明确的"Elasticsearch 未配置"错误。
 	}
 	if cfg.Elasticsearch.Index == "" {
 		cfg.Elasticsearch.Index = "filebeat-*"
@@ -193,13 +196,15 @@ func Load(path string) (*Config, error) {
 		cfg.Auth.JWTSecret = v
 	}
 	if cfg.Jenkins.URL == "" {
-		cfg.Jenkins.URL = "http://127.0.0.1:8080"
+		// P2-CONNECTION-DEFAULT-001 Phase 2: 不再设置隐式默认地址。
+		// 未配置时 URL 保持为空，由上层判断并返回明确的"Jenkins 未配置"错误。
 	}
 	if cfg.Jenkins.Timeout <= 0 {
 		cfg.Jenkins.Timeout = 30
 	}
 	if cfg.ArgoCD.URL == "" {
-		cfg.ArgoCD.URL = "https://argocd.example.com"
+		// P2-CONNECTION-DEFAULT-001 Phase 2: 不再设置隐式默认地址。
+		// 未配置时 URL 保持为空，由上层判断并返回明确的"ArgoCD 未配置"错误。
 	}
 	if cfg.ArgoCD.Timeout <= 0 {
 		cfg.ArgoCD.Timeout = 30

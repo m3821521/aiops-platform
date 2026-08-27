@@ -217,8 +217,8 @@ export default function UserManagement() {
       title: '状态',
       dataIndex: 'status',
       width: 100,
-      render: (status: number) => (
-        status === 1
+      render: (status: string) => (
+        status === 'active'
           ? <Badge status="success" text="正常" />
           : <Badge status="error" text="禁用" />
       ),

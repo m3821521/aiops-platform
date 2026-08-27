@@ -149,26 +149,23 @@ func (f *Factory) connectionToCluster(ctx context.Context, conn *connection.Conn
 }
 
 // BuildPrometheusQuerier 从 Connection 创建 monitoring.Querier。
-// 优先使用 Connection-based 配置，其次使用 Legacy config.yaml。
+// P2-CONNECTION-DEFAULT-001: 只从 ConnectionManager 获取 enabled Prometheus connection，
+// 不再 fallback 到 legacy config.yaml，避免隐式访问 127.0.0.1:9090。
 func (f *Factory) BuildPrometheusQuerier(ctx context.Context, rdb *redis.Client) (monitoring.Querier, error) {
-	// 1. 尝试从 Connection Manager 获取 prometheus 类型的 Connection
+	// 1. 从 Connection Manager 获取 enabled 的 prometheus 类型 Connection
 	conns, err := f.connMgr.ListByType(ctx, "prometheus", true)
 	if err != nil {
 		return nil, fmt.Errorf("获取 Prometheus Connection 失败: %w", err)
 	}
 
-	var address string
-	var timeout time.Duration
-
-	if len(conns) > 0 {
-		conn := conns[0] // 使用第一个 enabled 的 Prometheus Connection
-		address = conn.Endpoint
-		timeout = 30 * time.Second // 默认超时
-	} else if f.legacyCfg != nil {
-		// 2. 回退到 Legacy config.yaml
-		address = f.legacyCfg.Prometheus.Address
-		timeout = f.legacyCfg.Prometheus.Timeout
+	if len(conns) == 0 {
+		// P2-CONNECTION-DEFAULT-001: 没有配置 Prometheus connection，返回明确错误
+		return nil, fmt.Errorf("Prometheus 未配置")
 	}
+
+	conn := conns[0] // 使用第一个 enabled 的 Prometheus Connection
+	address := conn.Endpoint
+	timeout := 30 * time.Second // 默认超时
 
 	if strings.TrimSpace(address) == "" {
 		return nil, fmt.Errorf("Prometheus 未配置")
@@ -187,133 +184,124 @@ func (f *Factory) BuildPrometheusQuerier(ctx context.Context, rdb *redis.Client)
 
 // BuildElasticsearchClient 从 Connection 创建 *logging.Client。
 // 优先使用 Connection-based 配置，其次使用 Legacy config.yaml。
+// BuildElasticsearchClient 从 Connection 创建 *logging.Client。
+// P2-CONNECTION-DEFAULT-001 Phase 2: 只从 ConnectionManager 获取 enabled Elasticsearch connection，
+// 不再 fallback 到 legacy config.yaml，避免隐式访问 127.0.0.1:9200。
 func (f *Factory) BuildElasticsearchClient(ctx context.Context) (*logging.Client, error) {
-	// 1. 尝试从 Connection Manager 获取 elasticsearch 类型的 Connection
+	// 1. 从 Connection Manager 获取 enabled 的 elasticsearch 类型 Connection
 	conns, err := f.connMgr.ListByType(ctx, "elasticsearch", true)
 	if err != nil {
 		return nil, fmt.Errorf("获取 Elasticsearch Connection 失败: %w", err)
 	}
 
-	var address, index, username, password string
-	var timeoutSec int = 30
+	if len(conns) == 0 {
+		// P2-CONNECTION-DEFAULT-001: 没有配置 Elasticsearch connection，返回明确错误
+		return nil, fmt.Errorf("Elasticsearch 未配置")
+	}
 
-	if len(conns) > 0 {
-		conn := conns[0]
-		address = conn.Endpoint
-		// 从 Config 中获取 index
-		if idx, ok := conn.Config["index"]; ok {
-			index = fmt.Sprintf("%v", idx)
-		}
-		// 从 Credential 获取 username/password
-		if conn.CredentialID != nil && *conn.CredentialID > 0 {
-			credData, err := f.credSvc.GetDecryptedData(ctx, *conn.CredentialID)
-			if err == nil {
-				username, _ = credData["username"]
-				password, _ = credData["password"]
-				if apiKey, ok := credData["api_key"]; ok && apiKey != "" {
-					password = apiKey // 使用 API Key 作为 password
-				}
+	conn := conns[0]
+	address := conn.Endpoint
+	var index, username, password string
+	timeoutSec := 30
+
+	// 从 Config 中获取 index
+	if idx, ok := conn.Config["index"]; ok {
+		index = fmt.Sprintf("%v", idx)
+	}
+	if index == "" {
+		index = "filebeat-*"
+	}
+	// 从 Credential 获取 username/password
+	if conn.CredentialID != nil && *conn.CredentialID > 0 {
+		credData, err := f.credSvc.GetDecryptedData(ctx, *conn.CredentialID)
+		if err == nil {
+			username, _ = credData["username"]
+			password, _ = credData["password"]
+			if apiKey, ok := credData["api_key"]; ok && apiKey != "" {
+				password = apiKey // 使用 API Key 作为 password
 			}
 		}
-	} else if f.legacyCfg != nil {
-		// 2. 回退到 Legacy config.yaml
-		address = f.legacyCfg.Elasticsearch.Address
-		index = f.legacyCfg.Elasticsearch.Index
-		username = f.legacyCfg.Elasticsearch.Username
-		password = f.legacyCfg.Elasticsearch.Password
-		timeoutSec = f.legacyCfg.Elasticsearch.Timeout
 	}
 
 	if strings.TrimSpace(address) == "" {
-		return nil, nil // 未配置时返回 nil，由调用方处理
+		return nil, fmt.Errorf("Elasticsearch 未配置")
 	}
 
 	return logging.NewClient(address, index, username, password, timeoutSec), nil
 }
 
 // BuildJenkinsClient 从 Connection 创建 *automation.JenkinsClient。
-// 优先使用 Connection-based 配置，其次使用 Legacy config.yaml。
+// P2-CONNECTION-DEFAULT-001 Phase 2: 只从 ConnectionManager 获取 enabled Jenkins connection，
+// 不再 fallback 到 legacy config.yaml，避免隐式访问 127.0.0.1:8080。
 func (f *Factory) BuildJenkinsClient(ctx context.Context) (*automation.JenkinsClient, error) {
-	// 1. 尝试从 Connection Manager 获取 jenkins 类型的 Connection
+	// 1. 从 Connection Manager 获取 enabled 的 jenkins 类型 Connection
 	conns, err := f.connMgr.ListByType(ctx, "jenkins", true)
 	if err != nil {
 		return nil, fmt.Errorf("获取 Jenkins Connection 失败: %w", err)
 	}
 
-	var baseURL, username, token string
-	var timeoutSec int = 30
+	if len(conns) == 0 {
+		// P2-CONNECTION-DEFAULT-001: 没有配置 Jenkins connection，返回明确错误
+		return nil, fmt.Errorf("Jenkins 未配置")
+	}
 
-	if len(conns) > 0 {
-		conn := conns[0]
-		baseURL = conn.Endpoint
-		// 从 Credential 获取 username/token
-		if conn.CredentialID != nil && *conn.CredentialID > 0 {
-			credData, err := f.credSvc.GetDecryptedData(ctx, *conn.CredentialID)
-			if err == nil {
-				username, _ = credData["username"]
-				token, _ = credData["token"]
-				if password, ok := credData["password"]; ok && password != "" && token == "" {
-					token = password // 使用 password 作为 token
-				}
+	conn := conns[0]
+	baseURL := conn.Endpoint
+	var username, token string
+	timeoutSec := 30
+
+	// 从 Credential 获取 username/token
+	if conn.CredentialID != nil && *conn.CredentialID > 0 {
+		credData, err := f.credSvc.GetDecryptedData(ctx, *conn.CredentialID)
+		if err == nil {
+			username, _ = credData["username"]
+			token, _ = credData["token"]
+			if password, ok := credData["password"]; ok && password != "" && token == "" {
+				token = password // 使用 password 作为 token
 			}
 		}
-	} else if f.legacyCfg != nil {
-		// 2. 回退到 Legacy config.yaml
-		baseURL = f.legacyCfg.Jenkins.URL
-		username = f.legacyCfg.Jenkins.Username
-		token = f.legacyCfg.Jenkins.Token
-		timeoutSec = f.legacyCfg.Jenkins.Timeout
 	}
 
 	if strings.TrimSpace(baseURL) == "" {
-		return nil, nil // 未配置时返回 nil
+		return nil, fmt.Errorf("Jenkins 未配置")
 	}
 
 	return automation.NewJenkinsClient(baseURL, username, token, timeoutSec), nil
 }
 
 // BuildArgoCDClient 从 Connection 创建 *automation.ArgoCDClient。
-// 优先使用 Connection-based 配置，其次使用 Legacy config.yaml。
+// P2-CONNECTION-DEFAULT-001 Phase 2: 只从 ConnectionManager 获取 enabled ArgoCD connection，
+// 不再 fallback 到 legacy config.yaml，避免隐式访问默认地址。
 func (f *Factory) BuildArgoCDClient(ctx context.Context) (*automation.ArgoCDClient, error) {
-	// 1. 尝试从 Connection Manager 获取 argocd 类型的 Connection
+	// 1. 从 Connection Manager 获取 enabled 的 argocd 类型 Connection
 	conns, err := f.connMgr.ListByType(ctx, "argocd", true)
 	if err != nil {
 		return nil, fmt.Errorf("获取 ArgoCD Connection 失败: %w", err)
 	}
 
-	var baseURL, token string
-	var timeoutSec int = 30
+	if len(conns) == 0 {
+		// P2-CONNECTION-DEFAULT-001: 没有配置 ArgoCD connection，返回明确错误
+		return nil, fmt.Errorf("ArgoCD 未配置")
+	}
 
-	if len(conns) > 0 {
-		conn := conns[0]
-		baseURL = conn.Endpoint
-		// 检查是否为硬编码假地址
-		if strings.Contains(baseURL, "argocd.example.com") {
-			return nil, nil // 未配置，返回 nil
-		}
-		// 从 Credential 获取 token
-		if conn.CredentialID != nil && *conn.CredentialID > 0 {
-			credData, err := f.credSvc.GetDecryptedData(ctx, *conn.CredentialID)
-			if err == nil {
-				token, _ = credData["token"]
-				if apiKey, ok := credData["api_key"]; ok && apiKey != "" && token == "" {
-					token = apiKey
-				}
+	conn := conns[0]
+	baseURL := conn.Endpoint
+	var token string
+	timeoutSec := 30
+
+	// 从 Credential 获取 token
+	if conn.CredentialID != nil && *conn.CredentialID > 0 {
+		credData, err := f.credSvc.GetDecryptedData(ctx, *conn.CredentialID)
+		if err == nil {
+			token, _ = credData["token"]
+			if apiKey, ok := credData["api_key"]; ok && apiKey != "" && token == "" {
+				token = apiKey
 			}
-		}
-	} else if f.legacyCfg != nil {
-		// 2. 回退到 Legacy config.yaml
-		baseURL = f.legacyCfg.ArgoCD.URL
-		token = f.legacyCfg.ArgoCD.Token
-		timeoutSec = f.legacyCfg.ArgoCD.Timeout
-		// 检查是否为硬编码假地址
-		if strings.Contains(baseURL, "argocd.example.com") {
-			return nil, nil
 		}
 	}
 
 	if strings.TrimSpace(baseURL) == "" {
-		return nil, nil // 未配置时返回 nil
+		return nil, fmt.Errorf("ArgoCD 未配置")
 	}
 
 	return automation.NewArgoCDClient(baseURL, token, timeoutSec), nil

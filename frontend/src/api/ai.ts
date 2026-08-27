@@ -67,10 +67,13 @@ export interface AIConversationMessage {
 }
 
 export const aiApi = {
+  // AI ask 使用专用 timeout 28s（略大于 Backend 25s overall timeout，留 3s 网络延迟余量）
+  // 不修改全局 Axios 30s timeout，避免影响其他 API
   ask: (question: string, incidentId?: number, conversationId?: number) =>
     request.post<any, AIAskResponse>(
       '/api/v1/ai/ask',
       { question, incident_id: incidentId, conversation_id: conversationId },
+      { timeout: 28000 },
     ),
 
   getAudit: (params: { incident_id?: number; tool_name?: string; page?: number; page_size?: number }) =>

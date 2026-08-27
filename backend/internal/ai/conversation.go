@@ -65,6 +65,19 @@ func (r *ConversationRepository) GetByID(ctx context.Context, id int64) (*Conver
 	return &conv, nil
 }
 
+// GetByIDAndUser 按 ID 和用户 ID 获取对话，用于防止 IDOR 越权访问。
+// 不存在或不属于该用户时返回 "conversation not found"（不区分两种情况，防止信息泄露）。
+func (r *ConversationRepository) GetByIDAndUser(ctx context.Context, id, userID int64) (*Conversation, error) {
+	var conv Conversation
+	if err := r.db.WithContext(ctx).Where("id = ? AND user_id = ?", id, userID).First(&conv).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("conversation not found")
+		}
+		return nil, err
+	}
+	return &conv, nil
+}
+
 // ListByUser 获取用户的对话列表。
 func (r *ConversationRepository) ListByUser(ctx context.Context, userID int64, page, pageSize int) ([]Conversation, int64, error) {
 	var total int64
