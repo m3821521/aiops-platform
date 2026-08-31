@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/aiops/aiops-platform/internal/auth"
 )
 
 // RequestLog 记录每个 HTTP 请求的结构化日志。
@@ -26,9 +27,9 @@ func RequestLog() gin.HandlerFunc {
 			attrs = append(attrs, "request_id", rid)
 		}
 
-		// user_id（由 AuthMiddleware 设置）。
-		if uid, exists := c.Get("user_id"); exists {
-			attrs = append(attrs, "user_id", uid)
+		// user_id（由 AuthMiddleware 设置，通过 auth.CurrentUser 获取）。
+		if u := auth.CurrentUser(c); u != nil {
+			attrs = append(attrs, "user_id", u.ID)
 		}
 
 		// 4xx/5xx 用 Warn 级别，便于告警过滤。

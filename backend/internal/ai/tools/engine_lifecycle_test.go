@@ -39,6 +39,17 @@ func (m *mockProvider) Chat(ctx context.Context, messages []ai.Message) (string,
 	return `{"answer": "分析完成", "summary": "测试摘要", "root_cause": "测试根因", "confidence": 0.9}`, nil
 }
 
+func (m *mockProvider) ChatStream(ctx context.Context, messages []ai.Message, callback func(ai.StreamChunk) error) error {
+	resp, err := m.Chat(ctx, messages)
+	if err != nil {
+		return err
+	}
+	if err := callback(ai.StreamChunk{Text: resp, Done: false}); err != nil {
+		return err
+	}
+	return callback(ai.StreamChunk{Text: "", Done: true})
+}
+
 // blockingTool 是会阻塞的测试用 Tool，用于测试 Tool timeout。
 type blockingTool struct {
 	name      string

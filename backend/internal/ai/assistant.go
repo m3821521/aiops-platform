@@ -28,6 +28,11 @@ func NewAssistant(provider Provider, alertRepo *alert.Repository) *Assistant {
 	}
 }
 
+// GetProvider 返回 AI 助手使用的 Provider。
+func (a *Assistant) GetProvider() Provider {
+	return a.provider
+}
+
 // AskRequest 是 AI 助手的请求。
 type AskRequest struct {
 	Question string `json:"question"`

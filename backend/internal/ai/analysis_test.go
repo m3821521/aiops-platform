@@ -22,6 +22,17 @@ func (m *mockProvider) Chat(ctx context.Context, messages []Message) (string, er
 	}
 	return m.response, nil
 }
+
+func (m *mockProvider) ChatStream(ctx context.Context, messages []Message, callback func(StreamChunk) error) error {
+	if m.err != nil {
+		return m.err
+	}
+	if err := callback(StreamChunk{Text: m.response, Done: false}); err != nil {
+		return err
+	}
+	return callback(StreamChunk{Text: "", Done: true})
+}
+
 func (m *mockProvider) Name() string { return "mock" }
 
 // mockContextProvider 是测试用的 AIContextProvider。

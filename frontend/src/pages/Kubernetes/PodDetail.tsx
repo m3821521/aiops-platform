@@ -9,6 +9,7 @@ import {
 } from '@ant-design/icons'
 import { automationApi } from '@/api/automation'
 import { k8sApi } from '@/api/kubernetes'
+import { clusterApi, type PodMetric } from '@/api/cluster'
 import { usePermission } from '@/utils/permission'
 import type { Pod, PodDetail as PodDetailType, Container } from '@/types'
 import dayjs from 'dayjs'
@@ -43,6 +44,8 @@ export default function PodDetail({ pod, cluster, open, onClose, onRestarted }: 
   const [logsLoading, setLogsLoading] = useState(false)
   const [eventsLoading, setEventsLoading] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
+  const [podMetric, setPodMetric] = useState<PodMetric | null>(null)
+  const [metricError, setMetricError] = useState<string | null>(null)
 
   // P1-X.9: 统一 Data Trust（PodDetail 来自 Kubernetes API）
   const trust = useDataTrust({ source: 'kubernetes' })
@@ -88,6 +91,17 @@ export default function PodDetail({ pod, cluster, open, onClose, onRestarted }: 
       setDetail(null)
     } finally {
       setDetailLoading(false)
+    }
+    // 并行获取 metrics
+    if (pod) {
+      try {
+        const metrics = await clusterApi.podMetrics(pod.namespace)
+        const found = (metrics || []).find((m: PodMetric) => m.name === pod.name && m.namespace === pod.namespace)
+        setPodMetric(found || null)
+        setMetricError(null)
+      } catch (err: any) {
+        setMetricError(err?.message || 'Metrics 不可用')
+      }
     }
   }
 
@@ -435,6 +449,30 @@ export default function PodDetail({ pod, cluster, open, onClose, onRestarted }: 
                         ))}
                       </div>
                     )}
+
+                    <div style={{ padding: 12, border: '1px solid #f0f0f0', borderRadius: 4 }}>
+                      <Text strong style={{ display: 'block', marginBottom: 8 }}>资源监控（Metrics Server 实时）</Text>
+                      {podMetric ? (
+                        <Space size="large">
+                          <div>
+                            <Text type="secondary" style={{ fontSize: 12 }}>CPU 使用量</Text>
+                            <div style={{ fontSize: 16, fontWeight: 500 }}>{podMetric.cpu_cores}</div>
+                          </div>
+                          <div>
+                            <Text type="secondary" style={{ fontSize: 12 }}>内存使用量</Text>
+                            <div style={{ fontSize: 16, fontWeight: 500 }}>{podMetric.memory_bytes}</div>
+                          </div>
+                          <div>
+                            <Text type="secondary" style={{ fontSize: 12 }}>采集时间</Text>
+                            <div style={{ fontSize: 14 }}>{podMetric.timestamp ? dayjs(podMetric.timestamp).format('HH:mm:ss') : '-'}</div>
+                          </div>
+                        </Space>
+                      ) : (
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          {metricError || '暂无 Metrics 数据（等待 metrics-server 采集）'}
+                        </Text>
+                      )}
+                    </div>
                   </Space>
                 ),
               },

@@ -1,8 +1,8 @@
 import { useEffect, useState, useRef } from 'react'
-import { Table, Tag, Card, Button, Spin, Select, Space, Alert } from 'antd'
+import { Table, Tag, Card, Button, Spin, Select, Space, Alert, Tooltip } from 'antd'
 import { ReloadOutlined, EyeOutlined } from '@ant-design/icons'
 import { k8sApi } from '@/api/kubernetes'
-import { clusterApi } from '@/api/cluster'
+import { clusterApi, type NodeMetric } from '@/api/cluster'
 import type { Node, Cluster } from '@/types'
 import NodeDetail from './NodeDetail'
 import { useDataTrust } from '@/hooks/useDataTrust'
@@ -13,6 +13,8 @@ const POLL_INTERVAL = 15000
 
 export default function Nodes() {
   const [data, setData] = useState<Node[]>([])
+  const [nodeMetrics, setNodeMetrics] = useState<Map<string, NodeMetric>>(new Map())
+  const [metricsError, setMetricsError] = useState<string | null>(null)
   const [clusters, setClusters] = useState<Cluster[]>([])
   const [cluster, setCluster] = useState<string>('')
   const [loading, setLoading] = useState(false)
@@ -30,6 +32,19 @@ export default function Nodes() {
     } catch { /* ignore */ }
   }
 
+  const fetchMetrics = async () => {
+    try {
+      const metrics = await clusterApi.nodeMetrics()
+      const map = new Map<string, NodeMetric>()
+      ;(metrics || []).forEach((m: NodeMetric) => map.set(m.name, m))
+      setNodeMetrics(map)
+      setMetricsError(null)
+    } catch (err: any) {
+      setMetricsError(err?.message || 'Metrics 不可用')
+      // 不清除已有 metrics，保留上次成功数据
+    }
+  }
+
   const fetchData = async (silent = false) => {
     if (!cluster) return
     const seq = trust.beginFetch()
@@ -43,6 +58,8 @@ export default function Nodes() {
     } finally {
       if (!silent) setLoading(false)
     }
+    // 并行获取 metrics（不阻塞主列表加载）
+    fetchMetrics()
   }
 
   useEffect(() => { fetchClusters() }, [])
@@ -63,9 +80,40 @@ export default function Nodes() {
 
   const openDetail = (name: string) => { setSelectedNode(name); setDetailOpen(true) }
 
+  const renderMetric = (nodeName: string, type: 'cpu' | 'memory') => {
+    const m = nodeMetrics.get(nodeName)
+    if (!m) {
+      return <span style={{ color: '#999' }}>—</span>
+    }
+    if (type === 'cpu') {
+      return (
+        <Tooltip title={`CPU: ${m.cpu_cores} (${m.cpu_percent.toFixed(1)}%)`}>
+          <span>{m.cpu_percent.toFixed(1)}%</span>
+        </Tooltip>
+      )
+    }
+    return (
+      <Tooltip title={`Memory: ${m.memory_bytes} (${m.memory_percent.toFixed(1)}%)`}>
+        <span>{m.memory_percent.toFixed(1)}%</span>
+      </Tooltip>
+    )
+  }
+
   const columns = [
     { title: 'Node', dataIndex: 'name', key: 'name', render: (t: string) => <a onClick={() => openDetail(t)} style={{ fontWeight: 500 }}>{t}</a> },
     { title: '状态', dataIndex: 'status', key: 'status', render: (s: string) => <Tag color={statusColor(s)}>{s}</Tag> },
+    {
+      title: 'CPU',
+      key: 'cpu',
+      width: 90,
+      render: (_: any, record: Node) => renderMetric(record.name, 'cpu'),
+    },
+    {
+      title: 'Memory',
+      key: 'memory',
+      width: 90,
+      render: (_: any, record: Node) => renderMetric(record.name, 'memory'),
+    },
     { title: 'K8s 版本', dataIndex: 'version', key: 'version', render: (v: string) => v || '-' },
     { title: '内部 IP', dataIndex: 'internal_ip', key: 'ip', render: (v: string) => v || '-' },
     { title: 'OS', dataIndex: 'os', key: 'os', render: (v: string) => v ? v.split(' ')[0] : '-' },
@@ -108,6 +156,9 @@ export default function Nodes() {
         </div>
         {trust.error && trust.status === 'stale' && (
           <Alert message="数据刷新失败" description={trust.error + '（当前显示的是上次成功获取的数据）'} type="warning" showIcon style={{ marginBottom: 12 }} />
+        )}
+        {metricsError && nodeMetrics.size === 0 && (
+          <Alert message="Metrics Server 不可用" description={metricsError + '（CPU/Memory 指标暂不可用）'} type="info" showIcon style={{ marginBottom: 12 }} />
         )}
         <Spin spinning={loading}>
           <Table columns={columns} dataSource={data} rowKey="name" pagination={{ pageSize: 20 }} size="middle" />

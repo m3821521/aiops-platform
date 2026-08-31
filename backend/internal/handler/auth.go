@@ -321,8 +321,8 @@ func (h *AuthHandler) UpdateUserStatus(c *gin.Context) {
 
 	// 不允许禁用自己
 	// 获取当前登录用户ID
-	currentUserID, exists := c.Get("user_id")
-	if exists && currentUserID.(int64) == userID && req.Status == "disabled" {
+	currentUser := auth.CurrentUser(c)
+	if currentUser != nil && currentUser.ID == userID && req.Status == "disabled" {
 		response.BadRequest(c, "不能禁用当前登录用户")
 		return
 	}

@@ -369,3 +369,13 @@ func (p *captureProvider) Chat(ctx context.Context, messages []ai.Message) (stri
 	// 返回最终回答，避免循环
 	return `{"answer": "测试回答", "summary": "摘要", "confidence": 0.5}`, nil
 }
+func (p *captureProvider) ChatStream(ctx context.Context, messages []ai.Message, callback func(ai.StreamChunk) error) error {
+	resp, err := p.Chat(ctx, messages)
+	if err != nil {
+		return err
+	}
+	if err := callback(ai.StreamChunk{Text: resp, Done: false}); err != nil {
+		return err
+	}
+	return callback(ai.StreamChunk{Text: "", Done: true})
+}

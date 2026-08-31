@@ -8,6 +8,7 @@ export interface NodeMetric {
   memory_bytes: string
   memory_percent: number
   window: string
+  timestamp: string
 }
 
 export interface PodMetric {
@@ -16,6 +17,7 @@ export interface PodMetric {
   cpu_cores: string
   memory_bytes: string
   window: string
+  timestamp: string
 }
 
 export interface NamespaceItem {

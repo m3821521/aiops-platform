@@ -176,6 +176,8 @@ export default function AIAssistant() {
   const [historyLoadingId, setHistoryLoadingId] = useState<number | null>(null)
   // 递增的请求序号，用于防止快速切换历史对话时旧请求覆盖新请求
   const loadSeqRef = useRef(0)
+  // Streaming 请求的 AbortController，用于取消正在进行的 AI 请求
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     loadConversations()
@@ -375,47 +377,100 @@ export default function AIAssistant() {
     setInput('')
     setLoading(true)
 
+    // 创建 AbortController 用于取消请求
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+
+    let fullAnswer = ''
+    let hasError = false
+    let errorMsg = ''
+
     try {
-      const res = await aiApi.ask(question, incidentId, conversationId)
-      if (res.conversation_id) {
-        setConversationId(res.conversation_id)
-        loadConversations()
-      }
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantMsg.id
-            ? {
-                ...m,
-                loading: false,
-                content: res.answer,
-                summary: res.summary,
-                root_cause: res.root_cause,
-                confidence: res.confidence,
-                evidence: res.evidence,
-                recommendations: res.recommendations,
-                tool_calls: res.tool_calls,
-              }
-            : m,
-        ),
+      await aiApi.askStream(
+        question,
+        incidentId,
+        conversationId,
+        (event) => {
+          // 检查请求是否已被取消
+          if (controller.signal.aborted) {
+            return false
+          }
+
+          switch (event.type) {
+            case 'start':
+              // 连接建立，保持 loading 状态
+              break
+            case 'token':
+              // 实时追加 token
+              fullAnswer += event.data.text || ''
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantMsg.id
+                    ? { ...m, content: fullAnswer, loading: true }
+                    : m,
+                ),
+              )
+              break
+            case 'done':
+              // 流式完成
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantMsg.id
+                    ? { ...m, loading: false, content: fullAnswer }
+                    : m,
+                ),
+              )
+              break
+            case 'error':
+              // 流式错误
+              hasError = true
+              errorMsg = event.data.message || 'AI 请求失败'
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantMsg.id
+                    ? { ...m, loading: false, error: errorMsg, content: fullAnswer }
+                    : m,
+                ),
+              )
+              break
+            case 'heartbeat':
+              // 心跳，不做处理
+              break
+            default:
+              break
+          }
+        },
+        controller.signal,
       )
     } catch (err: any) {
-      // 将技术错误转换为用户友好的提示
-      let errorMsg = err?.response?.data?.message || err?.message || 'AI 请求失败'
-      if (err?.code === 'ECONNABORTED' || errorMsg?.includes('timeout') || errorMsg?.includes('超时')) {
-        errorMsg = 'AI 响应超时，问题可能过于复杂。请尝试简化问题或缩小范围后重试'
-      } else if (err?.response?.status === 503) {
-        errorMsg = err?.response?.data?.message || 'AI 服务暂时不可用，请稍后重试'
+      // 请求被取消
+      if (err.name === 'AbortError' || controller.signal.aborted) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMsg.id
+              ? { ...m, loading: false, content: fullAnswer || '（请求已取消）' }
+              : m,
+          ),
+        )
+      } else {
+        // 其他错误
+        hasError = true
+        errorMsg = err?.message || 'AI 请求失败'
+        if (errorMsg.includes('timeout') || errorMsg.includes('超时')) {
+          errorMsg = 'AI 响应超时，请稍后重试'
+        }
+        console.error('[AI] stream failed:', err)
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMsg.id
+              ? { ...m, loading: false, error: errorMsg, content: fullAnswer }
+              : m,
+          ),
+        )
       }
-      console.error('[AI] ask failed:', err)
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantMsg.id
-            ? { ...m, loading: false, error: errorMsg }
-            : m,
-        ),
-      )
     } finally {
       setLoading(false)
+      abortControllerRef.current = null
     }
   }
 

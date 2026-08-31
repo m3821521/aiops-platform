@@ -1,9 +1,9 @@
 import { useEffect, useState, useRef } from 'react'
-import { Table, Tag, Card, Button, Spin, Select, Space, Input, Alert } from 'antd'
+import { Table, Tag, Card, Button, Spin, Select, Space, Input, Alert, Tooltip } from 'antd'
 import { ReloadOutlined, EyeOutlined } from '@ant-design/icons'
 import { k8sApi } from '@/api/kubernetes'
 import type { Namespace } from '@/api/kubernetes'
-import { clusterApi } from '@/api/cluster'
+import { clusterApi, type PodMetric } from '@/api/cluster'
 import type { Pod, Cluster } from '@/types'
 import PodDetail from './PodDetail'
 import { useDataTrust } from '@/hooks/useDataTrust'
@@ -14,6 +14,8 @@ const POLL_INTERVAL = 15000
 
 export default function Pods() {
   const [data, setData] = useState<Pod[]>([])
+  const [podMetrics, setPodMetrics] = useState<Map<string, PodMetric>>(new Map())
+  const [metricsError, setMetricsError] = useState<string | null>(null)
   const [clusters, setClusters] = useState<Cluster[]>([])
   const [namespaces, setNamespaces] = useState<Namespace[]>([])
   const [cluster, setCluster] = useState<string>('')
@@ -46,6 +48,21 @@ export default function Pods() {
     }
   }
 
+  const fetchMetrics = async () => {
+    try {
+      const metrics = await clusterApi.podMetrics(namespace || undefined)
+      const map = new Map<string, PodMetric>()
+      ;(metrics || []).forEach((m: PodMetric) => {
+        map.set(`${m.namespace}/${m.name}`, m)
+      })
+      setPodMetrics(map)
+      setMetricsError(null)
+    } catch (err: any) {
+      setMetricsError(err?.message || 'Metrics 不可用')
+      // 不清除已有 metrics
+    }
+  }
+
   const fetchData = async (silent = false) => {
     if (!cluster) return
     const seq = trust.beginFetch()
@@ -60,6 +77,8 @@ export default function Pods() {
     } finally {
       if (!silent) setLoading(false)
     }
+    // 并行获取 metrics（不阻塞主列表加载）
+    fetchMetrics()
   }
 
   useEffect(() => { fetchClusters() }, [])
@@ -99,6 +118,26 @@ export default function Pods() {
     setDetailOpen(true)
   }
 
+  const renderPodMetric = (pod: Pod, type: 'cpu' | 'memory') => {
+    const key = `${pod.namespace}/${pod.name}`
+    const m = podMetrics.get(key)
+    if (!m) {
+      return <span style={{ color: '#999' }}>—</span>
+    }
+    if (type === 'cpu') {
+      return (
+        <Tooltip title={`CPU: ${m.cpu_cores}`}>
+          <span>{m.cpu_cores}</span>
+        </Tooltip>
+      )
+    }
+    return (
+      <Tooltip title={`Memory: ${m.memory_bytes}`}>
+        <span>{m.memory_bytes}</span>
+      </Tooltip>
+    )
+  }
+
   const columns = [
     {
       title: 'Pod',
@@ -110,6 +149,18 @@ export default function Pods() {
     },
     { title: 'Namespace', dataIndex: 'namespace', key: 'namespace', render: (t: string) => <Tag>{t}</Tag> },
     { title: '状态', dataIndex: 'status', key: 'status', render: (s: string) => <Tag color={statusColor(s)}>{s}</Tag> },
+    {
+      title: 'CPU',
+      key: 'cpu',
+      width: 80,
+      render: (_: any, record: Pod) => renderPodMetric(record, 'cpu'),
+    },
+    {
+      title: 'Memory',
+      key: 'memory',
+      width: 90,
+      render: (_: any, record: Pod) => renderPodMetric(record, 'memory'),
+    },
     { title: 'Node', dataIndex: 'node', key: 'node', render: (v: string) => v || '-' },
     { title: 'IP', dataIndex: 'ip', key: 'ip', render: (v: string) => v || '-' },
     { title: '重启次数', dataIndex: 'restart_count', key: 'restart', render: (v: number) => v ?? 0 },
@@ -161,6 +212,9 @@ export default function Pods() {
             showIcon
             style={{ marginBottom: 12 }}
           />
+        )}
+        {metricsError && podMetrics.size === 0 && (
+          <Alert message="Metrics Server 不可用" description={metricsError + '（CPU/Memory 指标暂不可用）'} type="info" showIcon style={{ marginBottom: 12 }} />
         )}
         <Spin spinning={loading}>
           <Table columns={columns} dataSource={filtered} rowKey="name" pagination={{ pageSize: 20 }} size="middle" />

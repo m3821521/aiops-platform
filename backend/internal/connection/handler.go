@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/aiops/aiops-platform/internal/auth"
 	"github.com/aiops/aiops-platform/pkg/response"
 )
 
@@ -405,10 +406,8 @@ func (h *Handler) BatchHealthCheck(c *gin.Context) {
 
 // getUserID 从 Gin Context 获取当前用户 ID。
 func getUserID(c *gin.Context) int64 {
-	if userID, exists := c.Get("user_id"); exists {
-		if id, ok := userID.(int64); ok {
-			return id
-		}
+	if u := auth.CurrentUser(c); u != nil {
+		return u.ID
 	}
 	return 0
 }

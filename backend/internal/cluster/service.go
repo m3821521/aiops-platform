@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -360,12 +361,14 @@ func (s *Service) ScaleDeployment(ctx context.Context, cluster, namespace, deplo
 
 // NodeMetric 节点指标。
 type NodeMetric struct {
-	Name          string `json:"name"`
-	CPUCores      string `json:"cpu_cores"`
+	Name          string  `json:"name"`
+	CPUCores      string  `json:"cpu_cores"`
 	CPUPercent    float64 `json:"cpu_percent"`
-	MemoryBytes   string `json:"memory_bytes"`
+	MemoryBytes   string  `json:"memory_bytes"`
 	MemoryPercent float64 `json:"memory_percent"`
-	Window        string `json:"window"`
+	Window        string  `json:"window"`
+	// Timestamp 是 Metrics Server 实际采集时间（来自 metrics.k8s.io API），不是 Backend fetch 时间。
+	Timestamp string `json:"timestamp"`
 }
 
 // PodMetric Pod 指标。
@@ -375,6 +378,8 @@ type PodMetric struct {
 	CPUCores    string `json:"cpu_cores"`
 	MemoryBytes string `json:"memory_bytes"`
 	Window      string `json:"window"`
+	// Timestamp 是 Metrics Server 实际采集时间（来自 metrics.k8s.io API），不是 Backend fetch 时间。
+	Timestamp string `json:"timestamp"`
 }
 
 // GetNodeMetrics 获取所有节点的 CPU 和内存使用率（通过 metrics-server）。
@@ -430,7 +435,8 @@ func (s *Service) GetNodeMetrics(ctx context.Context, cluster string) ([]NodeMet
 			CPUPercent:    cpuPercent,
 			MemoryBytes:   m.Usage.Memory().String(),
 			MemoryPercent: memoryPercent,
-			Window:        m.Window.String(),
+			Window:        m.Window.Duration.String(),
+			Timestamp:     m.Timestamp.UTC().Format(time.RFC3339),
 		})
 	}
 	return result, nil
@@ -470,7 +476,8 @@ func (s *Service) GetPodMetrics(ctx context.Context, cluster, namespace string) 
 			Name:        m.Name,
 			CPUCores:    cpuStr,
 			MemoryBytes: memoryStr,
-			Window:      m.Window.String(),
+			Window:      m.Window.Duration.String(),
+			Timestamp:   m.Timestamp.UTC().Format(time.RFC3339),
 		})
 	}
 	return result, nil

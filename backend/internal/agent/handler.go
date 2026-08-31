@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/aiops/aiops-platform/internal/auth"
 	"github.com/aiops/aiops-platform/pkg/response"
 )
 
@@ -49,15 +50,9 @@ func (h *Handler) Orchestrate(c *gin.Context) {
 	// 获取当前用户
 	var userID int64
 	var username string
-	if uid, exists := c.Get("user_id"); exists && uid != nil {
-		if id, ok := uid.(int64); ok {
-			userID = id
-		}
-	}
-	if uname, exists := c.Get("username"); exists && uname != nil {
-		if name, ok := uname.(string); ok {
-			username = name
-		}
+	if u := auth.CurrentUser(c); u != nil {
+		userID = u.ID
+		username = u.Username
 	}
 
 	orchestrationReq := &OrchestrationRequest{

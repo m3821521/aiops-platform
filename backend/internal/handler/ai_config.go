@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/aiops/aiops-platform/internal/ai"
+	"github.com/aiops/aiops-platform/internal/auth"
 	"github.com/aiops/aiops-platform/pkg/response"
 	"github.com/gin-gonic/gin"
 )
@@ -129,8 +130,11 @@ func (h *AIConfigHandler) UpdateConfig(c *gin.Context) {
 	}
 
 	// 获取用户 ID
-	userID, _ := c.Get("user_id")
-	uid, _ := userID.(int64)
+	currentUser := auth.CurrentUser(c)
+	var uid int64
+	if currentUser != nil {
+		uid = currentUser.ID
+	}
 
 	// 保存配置
 	cfg, err := h.Repo.Save(c.Request.Context(), provider, baseURL, req.APIKey, model, enabled, uid)

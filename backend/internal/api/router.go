@@ -179,6 +179,7 @@ func NewRouter(mode string, deps Deps) *gin.Engine {
 
 		if deps.AI != nil {
 			v1.POST("/ai/ask", deps.AI.Ask)
+			v1.POST("/ai/ask/stream", deps.AI.AskStream)
 			v1.GET("/ai/audit", deps.AI.ListAudit)
 		}
 

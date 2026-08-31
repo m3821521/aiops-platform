@@ -123,9 +123,13 @@ func TestPhase3_ToolCancellationPropagation(t *testing.T) {
 // TestPhase3_TimeoutErrorMapping 验证不同 timeout 类型的错误映射。
 func TestPhase3_TimeoutErrorMapping(t *testing.T) {
 	// 1. Overall timeout → ErrRequestTimeout
-	ctx1, cancel1 := context.WithTimeout(context.Background(), 1*time.Millisecond)
+	// 使用 50ms timeout 并等待 ctx.Done()，避免 1ms + time.Sleep 的不稳定性
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel1()
-	time.Sleep(5 * time.Millisecond)
+	<-ctx1.Done() // 确定性等待 context 超时
+	if ctx1.Err() != context.DeadlineExceeded {
+		t.Fatalf("expected context deadline exceeded, got: %v", ctx1.Err())
+	}
 	err1 := classifyContextError(ctx1, context.DeadlineExceeded)
 	if !errors.Is(err1, ErrRequestTimeout) {
 		t.Errorf("expected ErrRequestTimeout for overall timeout, got: %v", err1)
@@ -256,27 +260,44 @@ func TestPhase3_ObservabilityLogFields(t *testing.T) {
 
 // TestPhase3_FrontendAITimeoutConfig 验证 Frontend AI 专用 timeout 配置（通过代码审查验证）。
 // 这个测试验证 ai.ts 中的 ask 方法使用了专用 timeout。
+// P2-AI-ASSISTANT-PERF-002 Phase 1 更新：Backend overall timeout 从 25s 调整为 60s。
+// 新的层级关系：Backend 60s > Frontend AI 28s，这是有意为之。
+// 原因：DeepSeek 等 Provider 对简单问题的实际响应时间约 23~25s，
+// 25s Backend timeout 与正常 Provider latency 过于贴近导致误超时。
+// 60s Backend timeout 确保正常响应能成功返回；如果超过 28s，Frontend 会先超时，
+// 这是用户体验的上限，将在下一 Phase SSE Streaming 中解决。
 func TestPhase3_FrontendAITimeoutConfig(t *testing.T) {
 	// 读取 ai.ts 文件内容验证 timeout 配置
 	// 注意：这是一个 Go 测试，通过读取文件来验证 Frontend 配置
 	// 实际的 Frontend 测试由 npx tsc -b 和 npm run build 覆盖
 	t.Log("Frontend AI timeout config verified via code review: aiApi.ask uses { timeout: 28000 }")
-	t.Log("Backend overall timeout: 25s (aiAskTimeout in handler/ai.go)")
+	t.Log("Backend overall timeout: 60s (aiAskTimeout in handler/ai.go, P2-AI-ASSISTANT-PERF-002 Phase 1)")
 	t.Log("Frontend global timeout: 30s (client.ts)")
 	t.Log("Frontend AI专用 timeout: 28s (ai.ts)")
-	t.Log("Timeout hierarchy: Backend 25s < Frontend AI 28s < Frontend global 30s")
+	t.Log("Timeout hierarchy: Backend 60s > Frontend AI 28s (intentional, see Phase 1 report)")
 
-	// 验证 timeout 层次关系正确
-	backendTimeout := 25
+	// 验证 timeout 配置存在且合理
+	backendTimeout := 60
 	frontendAITimeout := 28
 	frontendGlobalTimeout := 30
 
-	if backendTimeout >= frontendAITimeout {
-		t.Errorf("Backend timeout (%ds) must be < Frontend AI timeout (%ds)", backendTimeout, frontendAITimeout)
+	// P2-AI-ASSISTANT-PERF-002 Phase 1: Backend timeout 现在大于 Frontend timeout。
+	// 这是有意为之，因为 Backend 需要足够时间处理慢 Provider（如 DeepSeek 23~25s）。
+	// Frontend 28s 是用户体验的上限，如果超过 28 秒，用户会看到 timeout 错误。
+	// 这个设计决策将在下一 Phase SSE Streaming 中重新评估。
+	if backendTimeout <= 0 {
+		t.Errorf("Backend timeout must be > 0, got %ds", backendTimeout)
 	}
-	if frontendAITimeout > frontendGlobalTimeout {
-		t.Errorf("Frontend AI timeout (%ds) must be <= Frontend global timeout (%ds)", frontendAITimeout, frontendGlobalTimeout)
+	if frontendAITimeout <= 0 {
+		t.Errorf("Frontend AI timeout must be > 0, got %ds", frontendAITimeout)
 	}
+	if frontendGlobalTimeout <= 0 {
+		t.Errorf("Frontend global timeout must be > 0, got %ds", frontendGlobalTimeout)
+	}
+
+	t.Log("Note: Backend timeout (60s) > Frontend AI timeout (28s) is intentional for Phase 1.")
+	t.Log("This ensures normal Provider responses (23~25s) are not falsely timed out by Backend.")
+	t.Log("Frontend 28s remains the user-experience ceiling; SSE Streaming is the next phase fix.")
 }
 
 // TestPhase3_NoFakeSuccessOnTimeout 验证 timeout 时不会返回 fake success。
@@ -312,6 +333,16 @@ func (p *slowProvider) Chat(ctx context.Context, messages []ai.Message) (string,
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
+}
+func (p *slowProvider) ChatStream(ctx context.Context, messages []ai.Message, callback func(ai.StreamChunk) error) error {
+	resp, err := p.Chat(ctx, messages)
+	if err != nil {
+		return err
+	}
+	if err := callback(ai.StreamChunk{Text: resp, Done: false}); err != nil {
+		return err
+	}
+	return callback(ai.StreamChunk{Text: "", Done: true})
 }
 
 // 确保 strings 包被使用（避免未使用导入错误）

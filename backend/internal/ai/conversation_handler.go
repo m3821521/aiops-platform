@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/aiops/aiops-platform/internal/auth"
 	"github.com/aiops/aiops-platform/pkg/response"
 	"github.com/gin-gonic/gin"
 )
@@ -21,17 +22,13 @@ func NewConversationHandler(repo *ConversationRepository) *ConversationHandler {
 }
 
 // getAuthenticatedUserID 从 gin context 中提取当前认证用户 ID。
-// 如果未认证（user_id 不存在或为 0），返回 (0, false)。
+// 如果未认证（用户不存在或 ID 为 0），返回 (0, false)。
 func getAuthenticatedUserID(c *gin.Context) (int64, bool) {
-	userID, exists := c.Get("user_id")
-	if !exists {
+	user := auth.CurrentUser(c)
+	if user == nil || user.ID <= 0 {
 		return 0, false
 	}
-	uid, ok := userID.(int64)
-	if !ok || uid <= 0 {
-		return 0, false
-	}
-	return uid, true
+	return user.ID, true
 }
 
 // ListConversations 处理 GET /api/v1/ai/conversations。

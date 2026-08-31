@@ -22,6 +22,18 @@ func (m *mockProvider) Chat(_ context.Context, messages []ai.Message) (string, e
 	return m.reply, nil
 }
 
+func (m *mockProvider) ChatStream(_ context.Context, messages []ai.Message, callback func(ai.StreamChunk) error) error {
+	m.received = messages
+	if m.err != nil {
+		return m.err
+	}
+	// 简单模拟：将完整回复作为单个 chunk 发送
+	if err := callback(ai.StreamChunk{Text: m.reply, Done: false}); err != nil {
+		return err
+	}
+	return callback(ai.StreamChunk{Text: "", Done: true})
+}
+
 func (m *mockProvider) Name() string {
 	return "mock"
 }

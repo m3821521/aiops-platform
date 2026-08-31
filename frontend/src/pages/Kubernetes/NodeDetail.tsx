@@ -1,9 +1,10 @@
 import { useEffect, useState, useRef } from 'react'
 import {
-  Drawer, Descriptions, Tag, Spin, Alert, Table, Typography, Space, Card,
+  Drawer, Descriptions, Tag, Spin, Alert, Table, Typography, Space, Card, Statistic,
 } from 'antd'
 import type { NodeDetail as NodeDetailType, NodeCondition } from '@/types'
 import { k8sApi } from '@/api/kubernetes'
+import { clusterApi, type NodeMetric } from '@/api/cluster'
 import dayjs from 'dayjs'
 import { useDataTrust } from '@/hooks/useDataTrust'
 import { extractProvenance } from '@/utils/provenance'
@@ -23,10 +24,24 @@ interface Props {
 export default function NodeDetail({ nodeName, cluster, open, onClose }: Props) {
   const [loading, setLoading] = useState(false)
   const [detail, setDetail] = useState<NodeDetailType | null>(null)
+  const [nodeMetric, setNodeMetric] = useState<NodeMetric | null>(null)
+  const [metricError, setMetricError] = useState<string | null>(null)
   const pollingRef = useRef<number | null>(null)
 
   // P1-X.9: 统一 Data Trust（NodeDetail 来自 Kubernetes API）
   const trust = useDataTrust({ source: 'kubernetes' })
+
+  const fetchMetric = async () => {
+    if (!nodeName) return
+    try {
+      const metrics = await clusterApi.nodeMetrics()
+      const found = (metrics || []).find((m: NodeMetric) => m.name === nodeName)
+      setNodeMetric(found || null)
+      setMetricError(null)
+    } catch (err: any) {
+      setMetricError(err?.message || 'Metrics 不可用')
+    }
+  }
 
   const fetchDetail = async (silent = false) => {
     if (!nodeName) return
@@ -42,6 +57,8 @@ export default function NodeDetail({ nodeName, cluster, open, onClose }: Props) 
     } finally {
       if (!silent) setLoading(false)
     }
+    // 并行获取 metrics
+    fetchMetric()
   }
 
   // Drawer 打开时立即加载
@@ -167,13 +184,27 @@ export default function NodeDetail({ nodeName, cluster, open, onClose }: Props) 
               </Card>
             )}
 
-            <Card size="small" title="资源监控">
-              <Alert
-                message="Prometheus 监控数据"
-                description="Node CPU / Memory / Disk 趋势图将在监控模块中展示。"
-                type="info"
-                showIcon
-              />
+            <Card size="small" title="资源监控（Metrics Server 实时）">
+              {nodeMetric ? (
+                <Space size="large">
+                  <Statistic title="CPU 使用率" value={nodeMetric.cpu_percent} precision={1} suffix="%" />
+                  <Statistic title="CPU 使用量" value={nodeMetric.cpu_cores} />
+                  <Statistic title="内存使用率" value={nodeMetric.memory_percent} precision={1} suffix="%" />
+                  <Statistic title="内存使用量" value={nodeMetric.memory_bytes} />
+                  <div>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      采集时间: {nodeMetric.timestamp ? dayjs(nodeMetric.timestamp).format('HH:mm:ss') : '-'}
+                    </Text>
+                  </div>
+                </Space>
+              ) : (
+                <Alert
+                  message={metricError ? 'Metrics Server 不可用' : '暂无 Metrics 数据'}
+                  description={metricError || '等待 metrics-server 采集数据...'}
+                  type="info"
+                  showIcon
+                />
+              )}
             </Card>
           </Space>
         )}
