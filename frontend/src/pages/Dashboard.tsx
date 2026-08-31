@@ -399,12 +399,27 @@ export default function Dashboard() {
         setMetricsError(`部分监控数据加载失败: ${failedMetrics.join(', ')}`)
         metricsTrust.markError(mSeq, `部分监控数据加载失败: ${failedMetrics.join(', ')}`)
       } else {
-        setMetricsError('监控数据不可用')
-        metricsTrust.markError(mSeq, '监控数据不可用')
+        // P2-CONNECTION-DEFAULT-001: Prometheus 未配置时不显示为"刷新失败"
+        const notConfigured =
+          (cpuResult.status === 'rejected' && /未配置|not configured/i.test(cpuResult.reason?.message || '')) ||
+          (memResult.status === 'rejected' && /未配置|not configured/i.test(memResult.reason?.message || ''))
+        if (notConfigured) {
+          // Prometheus 未配置，结束 fetching 状态，不计入 failedSources
+          metricsTrust.markSuccess(mSeq)
+        } else {
+          setMetricsError('监控数据不可用')
+          metricsTrust.markError(mSeq, '监控数据不可用')
+        }
       }
     } catch (err: any) {
-      setMetricsError('监控数据不可用')
-      metricsTrust.markError(mSeq, err?.message || '监控数据不可用')
+      const errMsg = err?.message || ''
+      if (/未配置|not configured/i.test(errMsg)) {
+        // Prometheus 未配置，不标记为刷新失败
+        metricsTrust.markSuccess(mSeq)
+      } else {
+        setMetricsError('监控数据不可用')
+        metricsTrust.markError(mSeq, errMsg || '监控数据不可用')
+      }
     }
   }, [clusters, timeRange])
 

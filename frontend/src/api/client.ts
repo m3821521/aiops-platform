@@ -61,6 +61,9 @@ request.interceptors.response.use(
   (error: AxiosError) => {
     const method = error.config?.method?.toLowerCase()
     const isGet = method === 'get'
+    // 提取后端返回的业务错误信息，确保 reject 的 Error.message 包含后端 message
+    const respData = error.response?.data as ApiResponse | undefined
+    const backendMessage = respData?.message
     if (error.response) {
       const status = error.response.status
       if (status === 401) {
@@ -80,14 +83,12 @@ request.interceptors.response.use(
       } else if (status >= 500) {
         // GET 请求的 500 不全局弹窗（如 k8s/Prometheus 不可用），由页面显示空状态
         if (!isGet) {
-          const data = error.response.data as ApiResponse
-          const rid = data?.request_id ? ` (${data.request_id})` : ''
+          const rid = respData?.request_id ? ` (${respData.request_id})` : ''
           message.error(`服务器错误${rid}`)
         }
       } else {
         if (!isGet) {
-          const data = error.response.data as ApiResponse
-          message.error(data?.message || `请求失败 (${status})`)
+          message.error(backendMessage || `请求失败 (${status})`)
         }
       }
     } else if (error.code === 'ECONNABORTED') {
@@ -95,7 +96,8 @@ request.interceptors.response.use(
     } else {
       if (!isGet) message.error('网络错误')
     }
-    return Promise.reject(error)
+    // reject 时使用后端 message（如果有），确保页面能根据错误信息判断"未配置"等场景
+    return Promise.reject(new Error(backendMessage || error.message || '请求失败'))
   },
 )
 
